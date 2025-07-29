@@ -1,0 +1,10 @@
+services:
+  db:
+    image: "postgres:17"
+    environment:
+      POSTGRES_PASSWORD: flatshcards
+      POSTGRES_USER: flatshcards
+    ports:
+      - 6543:5432
+    volumes:
+      - ./db-data:/var/lib/postgresql
