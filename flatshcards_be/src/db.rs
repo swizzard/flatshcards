@@ -156,9 +156,9 @@ impl DbStack {
         tx.commit().await?;
         Ok(())
     }
-    pub async fn delete(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+    pub async fn delete_by_uri(uri: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM stack WHERE uri = $1")
-            .bind(&self.uri)
+            .bind(uri)
             .execute(pool)
             .await?;
         Ok(())
@@ -265,9 +265,9 @@ impl DbCard {
         tx.commit().await?;
         Ok(())
     }
-    pub async fn delete(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+    pub async fn delete_by_uri(uri: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM card WHERE uri = $1")
-            .bind(&self.uri)
+            .bind(uri)
             .execute(pool)
             .await?;
         Ok(())

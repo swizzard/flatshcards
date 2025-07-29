@@ -36,10 +36,7 @@ use dotenv::dotenv;
 use resolver::HickoryDnsTxtResolver;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
-use std::{
-    io::{Error, ErrorKind},
-    sync::Arc,
-};
+use std::{io::Error, sync::Arc};
 use templates::{ErrorTemplate, Profile};
 
 extern crate dotenv;
@@ -60,9 +57,6 @@ type OAuthClientType = Arc<
         AtprotoHandleResolver<HickoryDnsTxtResolver, DefaultHttpClient>,
     >,
 >;
-
-/// HandleResolver to make it easier to access the OAuthClient in web requests
-type HandleResolver = Arc<CommonDidResolver<DefaultHttpClient>>;
 
 /// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L71
 /// OAuth callback endpoint to complete session creation
@@ -411,11 +405,8 @@ async fn main() -> std::io::Result<()> {
     let pool = match PgPool::connect(&db_connection_string).await {
         Ok(pool) => pool,
         Err(err) => {
-            log::error!("Error creating the db pool: {}", err);
-            return Err(Error::new(
-                ErrorKind::Other,
-                "db pool could not be created.",
-            ));
+            log::error!("Error creating the db pool: {err}");
+            return Err(Error::other("db pool could not be created."));
         }
     };
 
@@ -437,10 +428,10 @@ async fn main() -> std::io::Result<()> {
     let http_client = Arc::new(DefaultHttpClient::default());
     let config = OAuthClientConfig {
         client_metadata: AtprotoLocalhostClientMetadata {
-            redirect_uris: Some(vec![String::from(format!(
+            redirect_uris: Some(vec![format!(
                 //This must match the endpoint you use the callback function
                 "http://{host}:{port}/oauth/callback"
-            ))]),
+            )]),
             scopes: Some(vec![
                 Scope::Known(KnownScope::Atproto),
                 Scope::Known(KnownScope::TransitionGeneric),
@@ -463,18 +454,17 @@ async fn main() -> std::io::Result<()> {
         session_store: DbSessionStore::new(pool.clone()),
     };
     let client = Arc::new(OAuthClient::new(config).expect("failed to create OAuth client"));
-    let arc_pool = Arc::new(pool.clone());
     //Spawns the ingester that listens for other's Statusphere updates
+    let ingester_pool = pool.clone();
     tokio::spawn(async move {
-        start_ingester(arc_pool).await;
+        start_ingester(ingester_pool).await;
     });
-    let arc_pool = Arc::new(pool.clone());
     log::info!("starting HTTP server at http://{host}:{port}");
     HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
             .app_data(web::Data::new(client.clone()))
-            .app_data(web::Data::new(arc_pool.clone()))
+            .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(handle_resolver.clone()))
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), Key::from(&[0; 64]))

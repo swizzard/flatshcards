@@ -1,8 +1,6 @@
-use crate::db::StatusFromDb;
-use crate::lexicons;
-use crate::lexicons::xyz::statusphere::Status;
+use crate::db;
+use crate::lexicons::xyz::flatshcards;
 use anyhow::anyhow;
-use async_sqlite::Pool;
 use async_trait::async_trait;
 use atrium_api::types::Collection;
 use log::error;
@@ -14,13 +12,17 @@ use rocketman::{
     types::event::{Event, Operation},
 };
 use serde_json::Value;
+use sqlx::postgres::PgPool;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
 
+pub struct FlatshcardsStackIngester {
+    db_pool: PgPool,
+}
 #[async_trait]
-impl LexiconIngestor for StatusSphereIngester {
+impl LexiconIngestor for FlatshcardsStackIngester {
     async fn ingest(&self, message: Event<Value>) -> anyhow::Result<()> {
         if let Some(commit) = &message.commit {
             //We manually construct the uri since Jetstream does not provide it
@@ -29,31 +31,41 @@ impl LexiconIngestor for StatusSphereIngester {
             match commit.operation {
                 Operation::Create | Operation::Update => {
                     if let Some(record) = &commit.record {
-                        let status_at_proto_record = serde_json::from_value::<
-                            lexicons::xyz::statusphere::status::RecordData,
-                        >(record.clone())?;
+                        let flatshcards::cards::StackRecord {
+                            data:
+                                flatshcards::cards::Stack {
+                                    created_at,
+                                    back_lang,
+                                    front_lang,
+                                    label,
+                                },
+                            ..
+                        } = serde_json::from_value::<flatshcards::cards::StackRecord>(
+                            record.clone(),
+                        )?;
 
                         if let Some(ref _cid) = commit.cid {
                             // Although esquema does not have full validation yet,
                             // if you get to this point,
                             // You know the data structure is the same
-                            let created = status_at_proto_record.created_at.as_ref();
+                            let created_at = created_at.as_ref().to_utc();
                             let right_now = chrono::Utc::now();
                             // We save or update the record in the db
-                            StatusFromDb {
+                            db::DbStack {
                                 uri: record_uri,
                                 author_did: message.did.clone(),
-                                status: status_at_proto_record.status.clone(),
-                                created_at: created.to_utc(),
+                                back_lang,
+                                front_lang,
+                                label,
+                                created_at,
                                 indexed_at: right_now,
-                                handle: None,
                             }
-                            .save_or_update(&self.db_pool)
+                            .upsert(&self.db_pool)
                             .await?;
                         }
                     }
                 }
-                Operation::Delete => StatusFromDb::delete_by_uri(&self.db_pool, record_uri).await?,
+                Operation::Delete => db::DbStack::delete_by_uri(&record_uri, &self.db_pool).await?,
             }
         } else {
             return Err(anyhow!("Message has no commit"));
@@ -61,16 +73,75 @@ impl LexiconIngestor for StatusSphereIngester {
         Ok(())
     }
 }
-pub struct StatusSphereIngester {
-    db_pool: Arc<Pool>,
-}
 
-pub async fn start_ingester(db_pool: Arc<Pool>) {
+pub struct FlatshcardsCardIngester {
+    db_pool: PgPool,
+}
+#[async_trait]
+impl LexiconIngestor for FlatshcardsCardIngester {
+    async fn ingest(&self, message: Event<Value>) -> anyhow::Result<()> {
+        if let Some(commit) = &message.commit {
+            //We manually construct the uri since Jetstream does not provide it
+            //at://{users did}/{collection: xyz.statusphere.status}{records key}
+            let record_uri = format!("at://{}/{}/{}", message.did, commit.collection, commit.rkey);
+            match commit.operation {
+                Operation::Create | Operation::Update => {
+                    if let Some(record) = &commit.record {
+                        let flatshcards::cards::CardRecord {
+                            data:
+                                flatshcards::cards::Card {
+                                    created_at,
+                                    back_lang,
+                                    back_text,
+                                    front_lang,
+                                    front_text,
+                                    stack_id,
+                                },
+                            ..
+                        } = serde_json::from_value::<flatshcards::cards::CardRecord>(
+                            record.clone(),
+                        )?;
+
+                        if let Some(ref _cid) = commit.cid {
+                            // Although esquema does not have full validation yet,
+                            // if you get to this point,
+                            // You know the data structure is the same
+                            let created_at = created_at.as_ref().to_utc();
+                            let right_now = chrono::Utc::now();
+                            // We save or update the record in the db
+                            db::DbCard {
+                                uri: record_uri,
+                                author_did: message.did.clone(),
+                                back_lang,
+                                back_text,
+                                front_lang,
+                                front_text,
+                                stack_id: stack_id.into(),
+                                created_at,
+                                indexed_at: right_now,
+                            }
+                            .upsert(&self.db_pool)
+                            .await?;
+                        }
+                    }
+                }
+                Operation::Delete => db::DbCard::delete_by_uri(&record_uri, &self.db_pool).await?,
+            }
+        } else {
+            return Err(anyhow!("Message has no commit"));
+        }
+        Ok(())
+    }
+}
+pub async fn start_ingester(db_pool: PgPool) {
     // init the builder
     let opts = JetstreamOptions::builder()
         // your EXACT nsids
         // Which in this case is xyz.statusphere.status
-        .wanted_collections(vec![Status::NSID.parse().unwrap()])
+        .wanted_collections(vec![
+            flatshcards::Stack::NSID.parse().unwrap(),
+            flatshcards::Card::NSID.parse().unwrap(),
+        ])
         .build();
     // create the jetstream connector
     let jetstream = JetstreamConnection::new(opts);
@@ -80,8 +151,16 @@ pub async fn start_ingester(db_pool: Arc<Pool>) {
     let mut ingesters: HashMap<String, Box<dyn LexiconIngestor + Send + Sync>> = HashMap::new();
     ingesters.insert(
         // your EXACT nsid
-        Status::NSID.parse().unwrap(),
-        Box::new(StatusSphereIngester { db_pool }),
+        flatshcards::Stack::NSID.parse().unwrap(),
+        Box::new(FlatshcardsStackIngester {
+            db_pool: db_pool.clone(),
+        }),
+    );
+    ingesters.insert(
+        flatshcards::Card::NSID.parse().unwrap(),
+        Box::new(FlatshcardsCardIngester {
+            db_pool: db_pool.clone(),
+        }),
     );
 
     // tracks the last message we've processed
@@ -100,7 +179,7 @@ pub async fn start_ingester(db_pool: Arc<Pool>) {
                 handler::handle_message(message, &ingesters, reconnect_tx.clone(), c_cursor.clone())
                     .await
             {
-                error!("Error processing message: {}", e);
+                error!("Error processing message: {e}");
             };
         }
     });
@@ -108,7 +187,7 @@ pub async fn start_ingester(db_pool: Arc<Pool>) {
     // connect to jetstream
     // retries internally, but may fail if there is an extreme error.
     if let Err(e) = jetstream.connect(cursor.clone()).await {
-        error!("Failed to connect to Jetstream: {}", e);
+        error!("Failed to connect to Jetstream: {e}");
         std::process::exit(1);
     }
 }

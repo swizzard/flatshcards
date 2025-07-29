@@ -30,6 +30,7 @@ impl From<cards::Card> for KnownRecord {
         KnownRecord::LexiconXyzFlatshcardsCardsCard(Box::new(record.into()))
     }
 }
+#[allow(clippy::from_over_into)]
 impl Into<atrium_api::types::Unknown> for KnownRecord {
     fn into(self) -> atrium_api::types::Unknown {
         atrium_api::types::TryIntoUnknown::try_into_unknown(&self).unwrap()
