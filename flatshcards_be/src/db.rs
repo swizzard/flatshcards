@@ -1,13 +1,11 @@
-use actix_web::web::Data;
-use atrium_api::types::string::Did;
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::{
     FromRow,
     postgres::{PgPool, Postgres},
 };
 // use rusqlite::types::Type;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 pub async fn create_tables_in_database(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
