@@ -1,9 +1,9 @@
 use crate::{
-    db::{StatusFromDb, create_tables_in_database},
+    db::create_tables_in_database,
     ingester::start_ingester,
     lexicons::record::KnownRecord,
-    lexicons::xyz::statusphere::Status,
-    storage::{SqliteSessionStore, SqliteStateStore},
+    lexicons::xyz::flatshcards,
+    storage::{DbSessionStore, DbStateStore},
     templates::{HomeTemplate, LoginTemplate},
 };
 use actix_files::Files;
@@ -17,13 +17,13 @@ use actix_web::{
     web::{self, Redirect},
 };
 use askama::Template;
-use async_sqlite::{Pool, PoolBuilder};
 use atrium_api::{
     agent::Agent,
-    types::Collection,
-    types::string::{Datetime, Did},
+    types::{
+        Collection,
+        string::{Datetime, Did},
+    },
 };
-use atrium_common::resolver::Resolver;
 use atrium_identity::{
     did::{CommonDidResolver, CommonDidResolverConfig, DEFAULT_PLC_DIRECTORY_URL},
     handle::{AtprotoHandleResolver, AtprotoHandleResolverConfig},
@@ -35,8 +35,8 @@ use atrium_oauth::{
 use dotenv::dotenv;
 use resolver::HickoryDnsTxtResolver;
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPool;
 use std::{
-    collections::HashMap,
     io::{Error, ErrorKind},
     sync::Arc,
 };
@@ -54,8 +54,8 @@ mod templates;
 /// OAuthClientType to make it easier to access the OAuthClient in web requests
 type OAuthClientType = Arc<
     OAuthClient<
-        SqliteStateStore,
-        SqliteSessionStore,
+        DbStateStore,
+        DbSessionStore,
         CommonDidResolver<DefaultHttpClient>,
         AtprotoHandleResolver<HickoryDnsTxtResolver, DefaultHttpClient>,
     >,
@@ -63,39 +63,6 @@ type OAuthClientType = Arc<
 
 /// HandleResolver to make it easier to access the OAuthClient in web requests
 type HandleResolver = Arc<CommonDidResolver<DefaultHttpClient>>;
-
-/// All the available emoji status options
-const STATUS_OPTIONS: [&str; 29] = [
-    "👍",
-    "👎",
-    "💙",
-    "🥹",
-    "😧",
-    "😤",
-    "🙃",
-    "😉",
-    "😎",
-    "🤓",
-    "🤨",
-    "🥳",
-    "😭",
-    "😤",
-    "🤯",
-    "🫡",
-    "💀",
-    "✊",
-    "🤘",
-    "👀",
-    "🧠",
-    "👩‍💻",
-    "🧑‍💻",
-    "🥷",
-    "🧌",
-    "🦋",
-    "🚀",
-    "🥔",
-    "🦀",
-];
 
 /// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L71
 /// OAuth callback endpoint to complete session creation
@@ -223,73 +190,20 @@ async fn login_post(
 async fn home(
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
-    db_pool: web::Data<Arc<Pool>>,
-    handle_resolver: web::Data<HandleResolver>,
+    db_pool: web::ThinData<PgPool>,
 ) -> Result<impl Responder> {
     const TITLE: &str = "Home";
-    //Loads the last 10 statuses saved in the DB
-    let mut statuses = StatusFromDb::load_latest_statuses(&db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            log::error!("Error loading statuses: {err}");
-            vec![]
-        });
-
-    //Simple way to cut down on resolve calls if we already know the handle for the did
-    let mut quick_resolve_map: HashMap<Did, String> = HashMap::new();
-    // We resolve the handles to the DID. This is a bit messy atm,
-    // and there are hopes to find a cleaner way
-    // to handle resolving the DIDs and formating the handles,
-    // But it gets the job done for the purpose of this tutorial.
-    // PRs are welcomed!
-    for db_status in &mut statuses {
-        let authors_did = Did::new(db_status.author_did.clone()).expect("failed to parse did");
-        //Check to see if we already resolved it to cut down on resolve requests
-        match quick_resolve_map.get(&authors_did) {
-            None => {}
-            Some(found_handle) => {
-                db_status.handle = Some(found_handle.clone());
-                continue;
-            }
-        }
-        //Attempts to resolve the DID to a handle
-        db_status.handle = match handle_resolver.resolve(&authors_did).await {
-            Ok(did_doc) => {
-                match did_doc.also_known_as {
-                    None => None,
-                    Some(also_known_as) => {
-                        match also_known_as.is_empty() {
-                            true => None,
-                            false => {
-                                //also_known as a list starts the array with the highest priority handle
-                                let formatted_handle =
-                                    format!("@{}", also_known_as[0]).replace("at://", "");
-                                quick_resolve_map.insert(authors_did, formatted_handle.clone());
-                                Some(formatted_handle)
-                            }
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                log::error!("Error resolving did: {err}");
-                None
-            }
-        };
-    }
 
     // If the user is signed in, get an agent which communicates with their server
     match session.get::<String>("did").unwrap_or(None) {
         Some(did) => {
             let did = Did::new(did).expect("failed to parse did");
-            //Grabs the users last status to highlight it in the ui
-            let my_status = StatusFromDb::my_status(&db_pool, &did)
+            let stacks = db::StackDetails::user_stacks(&did, &db_pool)
                 .await
                 .unwrap_or_else(|err| {
-                    log::error!("Error loading my status: {err}");
-                    None
+                    log::error!("Error loading statuses: {err}");
+                    vec![]
                 });
-
             // gets the user's session from the session store to resume
             match oauth_client.restore(&did).await {
                 Ok(session) => {
@@ -312,7 +226,7 @@ async fn home(
 
                     let html = HomeTemplate {
                         title: TITLE,
-                        status_options: &STATUS_OPTIONS,
+                        stacks,
                         profile: match profile {
                             Ok(profile) => {
                                 let profile_data = Profile {
@@ -326,8 +240,6 @@ async fn home(
                                 None
                             }
                         },
-                        statuses,
-                        my_status: my_status.as_ref().map(|s| s.status.clone()),
                     }
                     .render()
                     .expect("template should be valid");
@@ -352,10 +264,8 @@ async fn home(
         None => {
             let html = HomeTemplate {
                 title: TITLE,
-                status_options: &STATUS_OPTIONS,
                 profile: None,
-                statuses,
-                my_status: None,
+                stacks: Vec::new(),
             }
             .render()
             .expect("template should be valid");
@@ -367,19 +277,33 @@ async fn home(
 
 /// The post body for changing your status
 #[derive(Serialize, Deserialize, Clone)]
-struct StatusForm {
-    status: String,
+struct NewStackForm {
+    back_lang: Option<String>,
+    front_lang: Option<String>,
+    label: String,
+}
+impl NewStackForm {
+    fn into_args(self, uri: String, author_did: String) -> db::StackArgs {
+        db::StackArgs {
+            uri,
+            author_did,
+            back_lang: self.back_lang,
+            front_lang: self.front_lang,
+            label: self.label,
+            indexed_at: None,
+        }
+    }
 }
 
 /// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L208
 /// Creates a new status
-#[post("/status")]
-async fn status(
+#[post("/stack")]
+async fn new_stack(
     request: HttpRequest,
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
-    db_pool: web::Data<Arc<Pool>>,
-    form: web::Form<StatusForm>,
+    db_pool: web::ThinData<PgPool>,
+    form: web::Form<NewStackForm>,
 ) -> HttpResponse {
     // Check if the user is logged in
     match session.get::<String>("did").unwrap_or(None) {
@@ -388,11 +312,14 @@ async fn status(
             // gets the user's session from the session store to resume
             match oauth_client.restore(&did).await {
                 Ok(session) => {
+                    let form = form.clone();
                     let agent = Agent::new(session);
                     //Creates a strongly typed ATProto record
-                    let status: KnownRecord = lexicons::xyz::statusphere::status::RecordData {
+                    let stack: KnownRecord = lexicons::xyz::flatshcards::cards::Stack {
+                        back_lang: form.back_lang.clone(),
+                        front_lang: form.front_lang.clone(),
+                        label: form.label.clone(),
                         created_at: Datetime::now(),
-                        status: form.status.clone(),
                     }
                     .into();
 
@@ -406,10 +333,10 @@ async fn status(
                         .repo
                         .create_record(
                             atrium_api::com::atproto::repo::create_record::InputData {
-                                collection: Status::NSID.parse().unwrap(),
+                                collection: flatshcards::Stack::NSID.parse().unwrap(),
                                 repo: did.into(),
                                 rkey: None,
-                                record: status.into(),
+                                record: stack.into(),
                                 swap_commit: None,
                                 validate: None,
                             }
@@ -419,13 +346,9 @@ async fn status(
 
                     match create_result {
                         Ok(record) => {
-                            let status = StatusFromDb::new(
-                                record.uri.clone(),
-                                did_string,
-                                form.status.clone(),
-                            );
-
-                            let _ = status.save(db_pool).await;
+                            let args = form.into_args(record.uri.clone(), did_string);
+                            let stack = db::DbStack::new(args);
+                            let _ = stack.save(&db_pool).await;
                             Redirect::to("/")
                                 .see_other()
                                 .respond_to(&request)
@@ -482,17 +405,16 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or(8080);
 
     //Uses a default sqlite db path or use the one from env
-    let db_connection_string =
-        std::env::var("DB_PATH").unwrap_or_else(|_| String::from("./statusphere.sqlite3"));
+    let db_connection_string = std::env::var("DB_URL").unwrap();
 
     //Crates a db pool to share resources to the db
-    let pool = match PoolBuilder::new().path(db_connection_string).open().await {
+    let pool = match PgPool::connect(&db_connection_string).await {
         Ok(pool) => pool,
         Err(err) => {
-            log::error!("Error creating the sqlite pool: {}", err);
+            log::error!("Error creating the db pool: {}", err);
             return Err(Error::new(
                 ErrorKind::Other,
-                "sqlite pool could not be created.",
+                "db pool could not be created.",
             ));
         }
     };
@@ -537,8 +459,8 @@ async fn main() -> std::io::Result<()> {
             authorization_server_metadata: Default::default(),
             protected_resource_metadata: Default::default(),
         },
-        state_store: SqliteStateStore::new(pool.clone()),
-        session_store: SqliteSessionStore::new(pool.clone()),
+        state_store: DbStateStore::new(pool.clone()),
+        session_store: DbSessionStore::new(pool.clone()),
     };
     let client = Arc::new(OAuthClient::new(config).expect("failed to create OAuth client"));
     let arc_pool = Arc::new(pool.clone());
@@ -570,7 +492,7 @@ async fn main() -> std::io::Result<()> {
             .service(login_post)
             .service(logout)
             .service(home)
-            .service(status)
+            .service(new_stack)
     })
     .bind(("127.0.0.1", port))?
     .run()

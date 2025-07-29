@@ -438,4 +438,26 @@ UPDATE auth_state SET state = $2 WHERE key = $1
             .await?;
         Ok(())
     }
+    pub async fn get_by_key(key: &str, pool: &PgPool) -> Result<Option<Self>, sqlx::Error> {
+        let res = sqlx::query_as(
+            "
+        SELECT key, session FROM auth_state WHERE key = $1 LIMIT 1
+                ",
+        )
+        .bind(key)
+        .fetch_optional(pool)
+        .await?;
+        Ok(res)
+    }
+    pub async fn delete_by_key(key: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "
+DELETE FROM auth_state WHERE key = $1
+",
+        )
+        .bind(key)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
 }

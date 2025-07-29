@@ -1,6 +1,6 @@
 ///The askama template types for HTML
 ///
-use crate::db::StatusFromDb;
+use crate::db;
 use askama::Template;
 use serde::{Deserialize, Serialize};
 
@@ -8,10 +8,8 @@ use serde::{Deserialize, Serialize};
 #[template(path = "home.html")]
 pub struct HomeTemplate<'a> {
     pub title: &'a str,
-    pub status_options: &'a [&'a str],
     pub profile: Option<Profile>,
-    pub statuses: Vec<StatusFromDb>,
-    pub my_status: Option<String>,
+    pub stacks: Vec<db::StackDetails>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -37,6 +37,7 @@ sqlx = { version = "0.8.6", features = [
   "runtime-tokio",
   "tls-native-tls",
 ], default-features = false }
+codes-iso-639 = "0.1.5"
 
 [build-dependencies]
 askama = "0.14"

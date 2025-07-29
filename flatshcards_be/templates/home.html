@@ -4,8 +4,8 @@
 <div id="root">
     <div class="error"></div>
     <div id="header">
-        <h1>Rusty Statusphere</h1>
-        <p>Set your status on the Atmosphere.</p>
+        <h1>Flatshcards</h1>
+        <p>Flashcards on the Atmosphere.</p>
     </div>
     <div class="container">
         <div class="card">
@@ -17,8 +17,7 @@
                     <strong>{{display_name}}</strong>
                     {% else %}
                     <strong>friend</strong>
-                    {% endif %}. What's
-                    your status today??
+                    {% endif %}.
                 </div>
                 <div>
                     <button type="submit">Log out</button>
@@ -32,34 +31,20 @@
                 </div>
             </div>
             {% endif %}
-
-
         </div>
-        <form action="/status" method="post" class="status-options">
-            {% for status in status_options %}
-            <button
-                    class="{% if let Some(my_status) = my_status %} {%if my_status == status %} status-option selected {% else %} status-option {% endif %} {% else %} status-option  {%endif%} "
-                    name="status" value="{{status}}">
-                {{status}}
-            </button>
-
-            {% endfor %}
-        </form>
-        {% for status in statuses %}
-        <div class="{% if loop.first %} status-line no-line {% else %} status-line {% endif %} ">
-            <div>
-                <div class="status">{{status.status}}</div>
+        {% if stacks.len() == 0 %}
+            <div class="status-line no-line">No Stacks</div>
+        {% endif %}
+        {% for stack in stacks %}
+            <div class="{% if loop.first %} status-line no-line {% else %} status-line {% endif %} ">
+                <div>
+                    <div class="status">{{stack.label}}</div>
+                </div>
+                <div class="desc">
+                    <p class="lang"><b>Front Language:</b> {% if let Some(l) = stack.front_lang %} {{ l }} {% else %} (Not Specified){% endif %}</p>
+                    <p class="lang"><b>Back Language:</b> {% if let Some(l) = stack.back_lang %} {{ l }} {% else %} (Not Specified){% endif %}</p>
+                </div>
             </div>
-            <div class="desc">
-                <a class="author"
-                   href="https://bsky.app/profile/{{status.author_did}}">{{status.author_display_name()}}</a>
-                {% if status.is_today() %}
-                is feeling {{status.status}} today
-                {% else %}
-                was feeling {{status.status}} on {{status.created_at}}
-                {% endif %}
-            </div>
-        </div>
         {% endfor %}
     </div>
 </div>
