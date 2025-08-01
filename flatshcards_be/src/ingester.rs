@@ -1,5 +1,5 @@
 use crate::db;
-use crate::lexicons::xyz::flatshcards;
+use crate::lexicons::xyz::flatshcards::{self, card, stack};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use atrium_api::types::Collection;
@@ -31,18 +31,16 @@ impl LexiconIngestor for FlatshcardsStackIngester {
             match commit.operation {
                 Operation::Create | Operation::Update => {
                     if let Some(record) = &commit.record {
-                        let flatshcards::cards::StackRecord {
+                        let stack::StackRecord {
                             data:
-                                flatshcards::cards::Stack {
+                                stack::Stack {
                                     created_at,
                                     back_lang,
                                     front_lang,
                                     label,
                                 },
                             ..
-                        } = serde_json::from_value::<flatshcards::cards::StackRecord>(
-                            record.clone(),
-                        )?;
+                        } = serde_json::from_value::<stack::StackRecord>(record.clone())?;
 
                         if let Some(ref _cid) = commit.cid {
                             // Although esquema does not have full validation yet,
@@ -87,9 +85,9 @@ impl LexiconIngestor for FlatshcardsCardIngester {
             match commit.operation {
                 Operation::Create | Operation::Update => {
                     if let Some(record) = &commit.record {
-                        let flatshcards::cards::CardRecord {
+                        let card::CardRecord {
                             data:
-                                flatshcards::cards::Card {
+                                card::Card {
                                     created_at,
                                     back_lang,
                                     back_text,
@@ -98,9 +96,7 @@ impl LexiconIngestor for FlatshcardsCardIngester {
                                     stack_id,
                                 },
                             ..
-                        } = serde_json::from_value::<flatshcards::cards::CardRecord>(
-                            record.clone(),
-                        )?;
+                        } = serde_json::from_value::<card::CardRecord>(record.clone())?;
 
                         if let Some(ref _cid) = commit.cid {
                             // Although esquema does not have full validation yet,

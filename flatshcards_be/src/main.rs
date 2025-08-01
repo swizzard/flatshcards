@@ -1,6 +1,7 @@
 use crate::{
     db::create_tables_in_database,
     ingester::start_ingester,
+    lang::{is_lang, lang_choices},
     lexicons::record::KnownRecord,
     lexicons::xyz::flatshcards,
     storage::{DbSessionStore, DbStateStore},
@@ -43,6 +44,7 @@ extern crate dotenv;
 
 mod db;
 mod ingester;
+mod lang;
 mod lexicons;
 mod resolver;
 mod storage;
@@ -217,23 +219,29 @@ async fn home(
                             .into(),
                         )
                         .await;
-
-                    let html = HomeTemplate {
-                        title: TITLE,
-                        stacks,
-                        profile: match profile {
-                            Ok(profile) => {
+                    let mut error = None;
+                    let mut pr = None;
+                    match profile {
+                        Ok(profile) => {
+                            pr = {
                                 let profile_data = Profile {
                                     did: profile.did.to_string(),
                                     display_name: profile.display_name.clone(),
                                 };
                                 Some(profile_data)
                             }
-                            Err(err) => {
-                                log::error!("Error accessing profile: {err}");
-                                None
-                            }
-                        },
+                        }
+                        Err(err) => {
+                            log::error!("Error accessing profile: {err}");
+                            error = Some("Can't get profile: {err}");
+                        }
+                    }
+                    let html = HomeTemplate {
+                        title: TITLE,
+                        stacks,
+                        profile: pr,
+                        lang_choices: lang_choices(),
+                        error,
                     }
                     .render()
                     .expect("template should be valid");
@@ -260,6 +268,8 @@ async fn home(
                 title: TITLE,
                 profile: None,
                 stacks: Vec::new(),
+                lang_choices: lang_choices(),
+                error: None,
             }
             .render()
             .expect("template should be valid");
@@ -271,27 +281,53 @@ async fn home(
 
 /// The post body for changing your status
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct NewStackForm {
     back_lang: Option<String>,
     front_lang: Option<String>,
-    label: String,
+    stack_label: String,
 }
 impl NewStackForm {
-    fn into_args(self, uri: String, author_did: String) -> db::StackArgs {
+    fn lang_valid(lang: &str) -> bool {
+        is_lang(lang)
+    }
+    fn front_valid(&self) -> bool {
+        if let Some(ref l) = self.front_lang {
+            NewStackForm::lang_valid(l)
+        } else {
+            true
+        }
+    }
+    fn back_valid(&self) -> bool {
+        if let Some(ref l) = self.back_lang {
+            NewStackForm::lang_valid(l)
+        } else {
+            true
+        }
+    }
+    fn to_args(&self, uri: String, author_did: String) -> db::StackArgs {
         db::StackArgs {
             uri,
             author_did,
-            back_lang: self.back_lang,
-            front_lang: self.front_lang,
-            label: self.label,
+            back_lang: self.back_lang.clone(),
+            front_lang: self.front_lang.clone(),
+            label: self.stack_label.clone(),
             indexed_at: None,
         }
     }
+    fn to_record(&self) -> KnownRecord {
+        lexicons::xyz::flatshcards::stack::Stack {
+            back_lang: self.back_lang.clone(),
+            front_lang: self.front_lang.clone(),
+            label: self.stack_label.clone(),
+            created_at: Datetime::now(),
+        }
+        .into()
+    }
 }
 
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L208
-/// Creates a new status
-#[post("/stack")]
+/// Creates a new stack
+#[post("/stacks")]
 async fn new_stack(
     request: HttpRequest,
     session: Session,
@@ -307,15 +343,29 @@ async fn new_stack(
             match oauth_client.restore(&did).await {
                 Ok(session) => {
                     let form = form.clone();
+                    if !form.front_valid() {
+                        let bad_lang = form.front_lang.unwrap(); // None is valid
+                        let error_html = ErrorTemplate {
+                            title: "Form Validation",
+                            error: format!("Invalid front language {bad_lang}").as_ref(),
+                        }
+                        .render()
+                        .expect("template should be valid");
+                        return HttpResponse::Ok().body(error_html);
+                    };
+                    if !form.back_valid() {
+                        let bad_lang = form.back_lang.unwrap(); // None is valid
+                        let error_html = ErrorTemplate {
+                            title: "Form Validation",
+                            error: format!("Invalid back language {bad_lang}").as_ref(),
+                        }
+                        .render()
+                        .expect("template should be valid");
+                        return HttpResponse::Ok().body(error_html);
+                    };
                     let agent = Agent::new(session);
                     //Creates a strongly typed ATProto record
-                    let stack: KnownRecord = lexicons::xyz::flatshcards::cards::Stack {
-                        back_lang: form.back_lang.clone(),
-                        front_lang: form.front_lang.clone(),
-                        label: form.label.clone(),
-                        created_at: Datetime::now(),
-                    }
-                    .into();
+                    let stack = form.to_record();
 
                     // TODO no data validation yet from esquema
                     // Maybe you'd like to add it? https://github.com/fatfingers23/esquema/issues/3
@@ -340,7 +390,7 @@ async fn new_stack(
 
                     match create_result {
                         Ok(record) => {
-                            let args = form.into_args(record.uri.clone(), did_string);
+                            let args = form.to_args(record.uri.clone(), did_string);
                             let stack = db::DbStack::new(args);
                             let _ = stack.save(&db_pool).await;
                             Redirect::to("/")

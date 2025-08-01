@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "xyz.flatshcards.stack",
+  "main": {
+    "type": "record",
+    "key": "tid",
+    "record": {
+      "type": "object",
+      "description": "a stack of flashcards",
+      "required": ["createdAt", "label"],
+      "properties": {
+        "backLang": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2,
+          "maxGraphemes": 2
+        },
+        "frontLang": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2,
+          "maxGraphemes": 2,
+          "default": "en"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    }
+  }
+}

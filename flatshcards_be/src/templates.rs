@@ -10,6 +10,8 @@ pub struct HomeTemplate<'a> {
     pub title: &'a str,
     pub profile: Option<Profile>,
     pub stacks: Vec<db::StackDetails>,
+    pub lang_choices: Vec<(&'static str, &'static str)>,
+    pub error: Option<&'a str>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

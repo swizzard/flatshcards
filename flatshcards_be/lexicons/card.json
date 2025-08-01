@@ -1,0 +1,52 @@
+{
+  "lexicon": 1,
+  "id": "xyz.flatshcards.card",
+  "main": {
+    "type": "record",
+    "key": "tid",
+    "record": {
+      "type": "object",
+      "description": "a single flashcard",
+      "required": [
+        "backLang",
+        "backText",
+        "createdAt",
+        "frontLang",
+        "frontText",
+        "stackId"
+      ],
+      "properties": {
+        "backLang": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2,
+          "maxGraphemes": 2
+        },
+        "backText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "frontLang": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2,
+          "maxGraphemes": 2
+        },
+        "frontText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "stackId": {
+          "type": "string",
+          "format": "record-key"
+        }
+      }
+    }
+  }
+}
