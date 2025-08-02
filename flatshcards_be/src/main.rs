@@ -1,44 +1,33 @@
 use crate::{
     db::create_tables_in_database,
     ingester::start_ingester,
-    lang::{is_lang, lang_choices},
-    lexicons::record::KnownRecord,
-    lexicons::xyz::flatshcards,
+    routes::{
+        cards::{create_card, delete_card, put_card},
+        home,
+        stacks::{clone_stack, create_stack, delete_stack, put_stack},
+        user_management::{login, login_post, logout, oauth_callback},
+    },
     storage::{DbSessionStore, DbStateStore},
-    templates::{HomeTemplate, LoginTemplate},
 };
 use actix_files::Files;
-use actix_session::{
-    Session, SessionMiddleware, config::PersistentSession, storage::CookieSessionStore,
-};
+use actix_session::{SessionMiddleware, config::PersistentSession, storage::CookieSessionStore};
 use actix_web::{
-    App, HttpRequest, HttpResponse, HttpServer, Responder, Result,
+    App, HttpServer,
     cookie::{self, Key},
-    get, middleware, post,
-    web::{self, Redirect},
-};
-use askama::Template;
-use atrium_api::{
-    agent::Agent,
-    types::{
-        Collection,
-        string::{Datetime, Did},
-    },
+    middleware, web,
 };
 use atrium_identity::{
     did::{CommonDidResolver, CommonDidResolverConfig, DEFAULT_PLC_DIRECTORY_URL},
     handle::{AtprotoHandleResolver, AtprotoHandleResolverConfig},
 };
 use atrium_oauth::{
-    AtprotoLocalhostClientMetadata, AuthorizeOptions, CallbackParams, DefaultHttpClient,
-    KnownScope, OAuthClient, OAuthClientConfig, OAuthResolverConfig, Scope,
+    AtprotoLocalhostClientMetadata, DefaultHttpClient, KnownScope, OAuthClient, OAuthClientConfig,
+    OAuthResolverConfig, Scope,
 };
 use dotenv::dotenv;
 use resolver::HickoryDnsTxtResolver;
-use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 use std::{io::Error, sync::Arc};
-use templates::{ErrorTemplate, Profile};
 
 extern crate dotenv;
 
@@ -47,396 +36,9 @@ mod ingester;
 mod lang;
 mod lexicons;
 mod resolver;
+mod routes;
 mod storage;
 mod templates;
-
-/// OAuthClientType to make it easier to access the OAuthClient in web requests
-type OAuthClientType = Arc<
-    OAuthClient<
-        DbStateStore,
-        DbSessionStore,
-        CommonDidResolver<DefaultHttpClient>,
-        AtprotoHandleResolver<HickoryDnsTxtResolver, DefaultHttpClient>,
-    >,
->;
-
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L71
-/// OAuth callback endpoint to complete session creation
-#[get("/oauth/callback")]
-async fn oauth_callback(
-    request: HttpRequest,
-    params: web::Query<CallbackParams>,
-    oauth_client: web::Data<OAuthClientType>,
-    session: Session,
-) -> HttpResponse {
-    //Processes the call back and parses out a session if found and valid
-    match oauth_client.callback(params.into_inner()).await {
-        Ok((bsky_session, _)) => {
-            let agent = Agent::new(bsky_session);
-            match agent.did().await {
-                Some(did) => {
-                    session.insert("did", did).unwrap();
-                    Redirect::to("/")
-                        .see_other()
-                        .respond_to(&request)
-                        .map_into_boxed_body()
-                }
-                None => {
-                    let html = ErrorTemplate {
-                        title: "Error",
-                        error: "The OAuth agent did not return a DID. May try re-logging in.",
-                    };
-                    HttpResponse::Ok().body(html.render().expect("template should be valid"))
-                }
-            }
-        }
-        Err(err) => {
-            log::error!("Error: {err}");
-            let html = ErrorTemplate {
-                title: "Error",
-                error: "OAuth error, check the logs",
-            };
-            HttpResponse::Ok().body(html.render().expect("template should be valid"))
-        }
-    }
-}
-
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L93
-/// Takes you to the login page
-#[get("/login")]
-async fn login() -> Result<impl Responder> {
-    let html = LoginTemplate {
-        title: "Log in",
-        error: None,
-    };
-    Ok(web::Html::new(
-        html.render().expect("template should be valid"),
-    ))
-}
-
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L93
-/// Logs you out by destroying your cookie on the server and web browser
-#[get("/logout")]
-async fn logout(request: HttpRequest, session: Session) -> HttpResponse {
-    session.purge();
-    Redirect::to("/")
-        .see_other()
-        .respond_to(&request)
-        .map_into_boxed_body()
-}
-
-/// The post body for logging in
-#[derive(Serialize, Deserialize, Clone)]
-struct LoginForm {
-    handle: String,
-}
-
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L101
-/// Login endpoint
-#[post("/login")]
-async fn login_post(
-    request: HttpRequest,
-    params: web::Form<LoginForm>,
-    oauth_client: web::Data<OAuthClientType>,
-) -> HttpResponse {
-    // This will act the same as the js method isValidHandle to make sure it is valid
-    match atrium_api::types::string::Handle::new(params.handle.clone()) {
-        Ok(handle) => {
-            //Creates the oauth url to redirect to for the user to log in with their credentials
-            let oauth_url = oauth_client
-                .authorize(
-                    &handle,
-                    AuthorizeOptions {
-                        scopes: vec![
-                            Scope::Known(KnownScope::Atproto),
-                            Scope::Known(KnownScope::TransitionGeneric),
-                        ],
-                        ..Default::default()
-                    },
-                )
-                .await;
-            match oauth_url {
-                Ok(url) => Redirect::to(url)
-                    .see_other()
-                    .respond_to(&request)
-                    .map_into_boxed_body(),
-                Err(err) => {
-                    log::error!("Error: {err}");
-                    let html = LoginTemplate {
-                        title: "Log in",
-                        error: Some("OAuth error"),
-                    };
-                    HttpResponse::Ok().body(html.render().expect("template should be valid"))
-                }
-            }
-        }
-        Err(err) => {
-            let html: LoginTemplate<'_> = LoginTemplate {
-                title: "Log in",
-                error: Some(err),
-            };
-            HttpResponse::Ok().body(html.render().expect("template should be valid"))
-        }
-    }
-}
-
-/// TS version https://github.com/bluesky-social/statusphere-example-app/blob/e4721616df50cd317c198f4c00a4818d5626d4ce/src/routes.ts#L146
-/// Home
-#[get("/")]
-async fn home(
-    session: Session,
-    oauth_client: web::Data<OAuthClientType>,
-    db_pool: web::ThinData<PgPool>,
-) -> Result<impl Responder> {
-    const TITLE: &str = "Home";
-
-    // If the user is signed in, get an agent which communicates with their server
-    match session.get::<String>("did").unwrap_or(None) {
-        Some(did) => {
-            let did = Did::new(did).expect("failed to parse did");
-            let stacks = db::StackDetails::user_stacks(&did, &db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    log::error!("Error loading statuses: {err}");
-                    vec![]
-                });
-            // gets the user's session from the session store to resume
-            match oauth_client.restore(&did).await {
-                Ok(session) => {
-                    //Creates an agent to make authenticated requests
-                    let agent = Agent::new(session);
-
-                    // Fetch additional information about the logged-in user
-                    let profile = agent
-                        .api
-                        .app
-                        .bsky
-                        .actor
-                        .get_profile(
-                            atrium_api::app::bsky::actor::get_profile::ParametersData {
-                                actor: atrium_api::types::string::AtIdentifier::Did(did),
-                            }
-                            .into(),
-                        )
-                        .await;
-                    let mut error = None;
-                    let mut pr = None;
-                    match profile {
-                        Ok(profile) => {
-                            pr = {
-                                let profile_data = Profile {
-                                    did: profile.did.to_string(),
-                                    display_name: profile.display_name.clone(),
-                                };
-                                Some(profile_data)
-                            }
-                        }
-                        Err(err) => {
-                            log::error!("Error accessing profile: {err}");
-                            error = Some("Can't get profile: {err}");
-                        }
-                    }
-                    let html = HomeTemplate {
-                        title: TITLE,
-                        stacks,
-                        profile: pr,
-                        lang_choices: lang_choices(),
-                        error,
-                    }
-                    .render()
-                    .expect("template should be valid");
-
-                    Ok(web::Html::new(html))
-                }
-                Err(err) => {
-                    // Destroys the system or you're in a loop
-                    session.purge();
-                    log::error!("Error restoring session: {err}");
-                    let error_html = ErrorTemplate {
-                        title: "Error",
-                        error: "Was an error resuming the session, please check the logs.",
-                    }
-                    .render()
-                    .expect("template should be valid");
-                    Ok(web::Html::new(error_html))
-                }
-            }
-        }
-
-        None => {
-            let html = HomeTemplate {
-                title: TITLE,
-                profile: None,
-                stacks: Vec::new(),
-                lang_choices: lang_choices(),
-                error: None,
-            }
-            .render()
-            .expect("template should be valid");
-
-            Ok(web::Html::new(html))
-        }
-    }
-}
-
-/// The post body for changing your status
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct NewStackForm {
-    back_lang: Option<String>,
-    front_lang: Option<String>,
-    stack_label: String,
-}
-impl NewStackForm {
-    fn lang_valid(lang: &str) -> bool {
-        is_lang(lang)
-    }
-    fn front_valid(&self) -> bool {
-        if let Some(ref l) = self.front_lang {
-            NewStackForm::lang_valid(l)
-        } else {
-            true
-        }
-    }
-    fn back_valid(&self) -> bool {
-        if let Some(ref l) = self.back_lang {
-            NewStackForm::lang_valid(l)
-        } else {
-            true
-        }
-    }
-    fn to_args(&self, uri: String, author_did: String) -> db::StackArgs {
-        db::StackArgs {
-            uri,
-            author_did,
-            back_lang: self.back_lang.clone(),
-            front_lang: self.front_lang.clone(),
-            label: self.stack_label.clone(),
-            indexed_at: None,
-        }
-    }
-    fn to_record(&self) -> KnownRecord {
-        lexicons::xyz::flatshcards::stack::Stack {
-            back_lang: self.back_lang.clone(),
-            front_lang: self.front_lang.clone(),
-            label: self.stack_label.clone(),
-            created_at: Datetime::now(),
-        }
-        .into()
-    }
-}
-
-/// Creates a new stack
-#[post("/stacks")]
-async fn new_stack(
-    request: HttpRequest,
-    session: Session,
-    oauth_client: web::Data<OAuthClientType>,
-    db_pool: web::ThinData<PgPool>,
-    form: web::Form<NewStackForm>,
-) -> HttpResponse {
-    // Check if the user is logged in
-    match session.get::<String>("did").unwrap_or(None) {
-        Some(did_string) => {
-            let did = Did::new(did_string.clone()).expect("failed to parse did");
-            // gets the user's session from the session store to resume
-            match oauth_client.restore(&did).await {
-                Ok(session) => {
-                    let form = form.clone();
-                    if !form.front_valid() {
-                        let bad_lang = form.front_lang.unwrap(); // None is valid
-                        let error_html = ErrorTemplate {
-                            title: "Form Validation",
-                            error: format!("Invalid front language {bad_lang}").as_ref(),
-                        }
-                        .render()
-                        .expect("template should be valid");
-                        return HttpResponse::Ok().body(error_html);
-                    };
-                    if !form.back_valid() {
-                        let bad_lang = form.back_lang.unwrap(); // None is valid
-                        let error_html = ErrorTemplate {
-                            title: "Form Validation",
-                            error: format!("Invalid back language {bad_lang}").as_ref(),
-                        }
-                        .render()
-                        .expect("template should be valid");
-                        return HttpResponse::Ok().body(error_html);
-                    };
-                    let agent = Agent::new(session);
-                    //Creates a strongly typed ATProto record
-                    let stack = form.to_record();
-
-                    // TODO no data validation yet from esquema
-                    // Maybe you'd like to add it? https://github.com/fatfingers23/esquema/issues/3
-
-                    let create_result = agent
-                        .api
-                        .com
-                        .atproto
-                        .repo
-                        .create_record(
-                            atrium_api::com::atproto::repo::create_record::InputData {
-                                collection: flatshcards::Stack::NSID.parse().unwrap(),
-                                repo: did.into(),
-                                rkey: None,
-                                record: stack.into(),
-                                swap_commit: None,
-                                validate: None,
-                            }
-                            .into(),
-                        )
-                        .await;
-
-                    match create_result {
-                        Ok(record) => {
-                            let args = form.to_args(record.uri.clone(), did_string);
-                            let stack = db::DbStack::new(args);
-                            let _ = stack.save(&db_pool).await;
-                            Redirect::to("/")
-                                .see_other()
-                                .respond_to(&request)
-                                .map_into_boxed_body()
-                        }
-                        Err(err) => {
-                            log::error!("Error creating status: {err}");
-                            let error_html = ErrorTemplate {
-                                title: "Error",
-                                error: "Was an error creating the status, please check the logs.",
-                            }
-                            .render()
-                            .expect("template should be valid");
-                            HttpResponse::Ok().body(error_html)
-                        }
-                    }
-                }
-                Err(err) => {
-                    // Destroys the system or you're in a loop
-                    session.purge();
-                    log::error!(
-                        "Error restoring session, we are removing the session from the cookie: {err}"
-                    );
-                    let error_html = ErrorTemplate {
-                        title: "Error",
-                        error: "Was an error resuming the session, please check the logs.",
-                    }
-                    .render()
-                    .expect("template should be valid");
-                    HttpResponse::Ok().body(error_html)
-                }
-            }
-        }
-        None => {
-            let error_template = ErrorTemplate {
-                title: "Error",
-                error: "You must be logged in to create a status.",
-            }
-            .render()
-            .expect("template should be valid");
-            HttpResponse::Ok().body(error_template)
-        }
-    }
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -532,7 +134,13 @@ async fn main() -> std::io::Result<()> {
             .service(login_post)
             .service(logout)
             .service(home)
-            .service(new_stack)
+            .service(create_card)
+            .service(delete_card)
+            .service(put_card)
+            .service(clone_stack)
+            .service(create_stack)
+            .service(delete_stack)
+            .service(put_stack)
     })
     .bind(("127.0.0.1", port))?
     .run()
