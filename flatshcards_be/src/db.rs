@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sqlx::{
-    FromRow,
+    FromRow, Row,
     postgres::{PgPool, Postgres},
 };
 // use rusqlite::types::Type;
@@ -162,6 +162,20 @@ impl DbStack {
             .execute(pool)
             .await?;
         Ok(())
+    }
+    pub async fn is_owned_by(
+        author_did: &str,
+        stack_uri: &str,
+        pool: &PgPool,
+    ) -> Result<bool, sqlx::Error> {
+        sqlx::query(
+            r#"SELECT EXISTS(SELECT 1 FROM stack WHERE author_did = $1 AND uri = $2) AS "exists"#,
+        )
+        .bind(author_did)
+        .bind(stack_uri)
+        .fetch_one(pool)
+        .await
+        .map(|r| r.get("exists"))
     }
 }
 

@@ -5,7 +5,7 @@ use crate::{
 };
 use actix_session::Session;
 use actix_web::{
-    HttpRequest, HttpResponse, Responder, get, post,
+    HttpRequest, HttpResponse, Responder, Result, get, post,
     web::{self, Redirect},
 };
 use askama::Template;

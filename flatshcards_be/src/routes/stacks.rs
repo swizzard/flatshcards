@@ -5,24 +5,45 @@ use crate::{
         record::KnownRecord,
         xyz::flatshcards::{Stack, stack},
     },
-    routes::OAuthClientType,
-    templates::ErrorTemplate,
+    routes::{AtS, OAuthClientType, get_session_agent_and_did},
+    templates::{self, ErrorTemplate},
 };
 use actix_session::Session;
 use actix_web::{
-    HttpRequest, HttpResponse, Responder, delete, post, put,
+    HttpRequest, HttpResponse, Responder, delete, get, post, put,
     web::{self, Redirect},
 };
 use askama::Template;
-use atrium_api::{
-    agent::Agent,
-    types::{
-        Collection,
-        string::{Datetime, Did},
-    },
+use atrium_api::types::{
+    Collection,
+    string::{Datetime, RecordKey},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
+
+#[get("/stacks/create")]
+pub(crate) async fn create_stacks_page(
+    request: HttpRequest,
+    session: Session,
+    oauth_client: web::Data<OAuthClientType>,
+) -> HttpResponse {
+    if get_session_agent_and_did(&oauth_client, &session)
+        .await
+        .is_some()
+    {
+        let html = templates::CreateStackTemplate {
+            title: "Create Stack",
+            lang_choices: lang_choices(),
+            error: None,
+        }
+        .render()
+        .unwrap();
+        HttpResponse::Ok().body(html)
+    } else {
+        let error_html = ErrorTemplate::session_agent_did().render().unwrap();
+        HttpResponse::Unauthorized().body(error_html)
+    }
+}
 
 /// Creates a new stack
 #[post("/stacks/create")]
@@ -33,106 +54,78 @@ pub(crate) async fn create_stack(
     db_pool: web::ThinData<PgPool>,
     form: web::Form<StackForm>,
 ) -> HttpResponse {
-    // Check if the user is logged in
-    match session.get::<String>("did").unwrap_or(None) {
-        Some(did_string) => {
-            let did = Did::new(did_string.clone()).expect("failed to parse did");
-            // gets the user's session from the session store to resume
-            match oauth_client.restore(&did).await {
-                Ok(session) => {
-                    let form = form.clone();
-                    if !form.front_valid() {
-                        let bad_lang = form.front_lang.unwrap(); // None is valid
-                        let error_html = ErrorTemplate {
-                            title: "Form Validation",
-                            error: format!("Invalid front language {bad_lang}").as_ref(),
-                        }
-                        .render()
-                        .expect("template should be valid");
-                        return HttpResponse::Ok().body(error_html);
-                    };
-                    if !form.back_valid() {
-                        let bad_lang = form.back_lang.unwrap(); // None is valid
-                        let error_html = ErrorTemplate {
-                            title: "Form Validation",
-                            error: format!("Invalid back language {bad_lang}").as_ref(),
-                        }
-                        .render()
-                        .expect("template should be valid");
-                        return HttpResponse::Ok().body(error_html);
-                    };
-                    let agent = Agent::new(session);
-                    //Creates a strongly typed ATProto record
-                    let stack = form.to_record();
-
-                    // TODO no data validation yet from esquema
-                    // Maybe you'd like to add it? https://github.com/fatfingers23/esquema/issues/3
-
-                    let create_result = agent
-                        .api
-                        .com
-                        .atproto
-                        .repo
-                        .create_record(
-                            atrium_api::com::atproto::repo::create_record::InputData {
-                                collection: Stack::NSID.parse().unwrap(),
-                                repo: did.into(),
-                                rkey: None,
-                                record: stack.into(),
-                                swap_commit: None,
-                                validate: None,
-                            }
-                            .into(),
-                        )
-                        .await;
-
-                    match create_result {
-                        Ok(record) => {
-                            let args = form.to_args(record.uri.clone(), did_string);
-                            let stack = db::DbStack::new(args);
-                            let _ = stack.save(&db_pool).await;
-                            Redirect::to("/")
-                                .see_other()
-                                .respond_to(&request)
-                                .map_into_boxed_body()
-                        }
-                        Err(err) => {
-                            log::error!("Error creating status: {err}");
-                            let error_html = ErrorTemplate {
-                                title: "Error",
-                                error: "Was an error creating the status, please check the logs.",
-                            }
-                            .render()
-                            .expect("template should be valid");
-                            HttpResponse::Ok().body(error_html)
-                        }
-                    }
-                }
-                Err(err) => {
-                    // Destroys the system or you're in a loop
-                    session.purge();
-                    log::error!(
-                        "Error restoring session, we are removing the session from the cookie: {err}"
-                    );
-                    let error_html = ErrorTemplate {
-                        title: "Error",
-                        error: "Was an error resuming the session, please check the logs.",
-                    }
-                    .render()
-                    .expect("template should be valid");
-                    HttpResponse::Ok().body(error_html)
-                }
-            }
-        }
-        None => {
-            let error_template = ErrorTemplate {
-                title: "Error",
-                error: "You must be logged in to create a status.",
+    if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let form = form.clone();
+        if !form.front_valid() {
+            let bad_lang = form.front_lang.unwrap(); // None is valid
+            let error_html = ErrorTemplate {
+                title: "Form Validation",
+                error: format!("Invalid front language {bad_lang}").as_ref(),
             }
             .render()
             .expect("template should be valid");
-            HttpResponse::Ok().body(error_template)
+            return HttpResponse::Ok().body(error_html);
+        };
+        if !form.back_valid() {
+            let bad_lang = form.back_lang.unwrap(); // None is valid
+            let error_html = ErrorTemplate {
+                title: "Form Validation",
+                error: format!("Invalid back language {bad_lang}").as_ref(),
+            }
+            .render()
+            .expect("template should be valid");
+            return HttpResponse::Ok().body(error_html);
+        };
+        let stack = form.to_record();
+        let db_did = did.clone().to_string();
+
+        let create_result = agent
+            .api
+            .com
+            .atproto
+            .repo
+            .create_record(
+                atrium_api::com::atproto::repo::create_record::InputData {
+                    collection: Stack::NSID.parse().unwrap(),
+                    repo: did.into(),
+                    rkey: None,
+                    record: stack.into(),
+                    swap_commit: None,
+                    validate: None,
+                }
+                .into(),
+            )
+            .await;
+
+        match create_result {
+            Ok(record) => {
+                let args = form.to_args(record.uri.clone(), db_did);
+                let stack = db::DbStack::new(args);
+                let _ = stack.save(&db_pool).await;
+                Redirect::to("/")
+                    .see_other()
+                    .respond_to(&request)
+                    .map_into_boxed_body()
+            }
+            Err(err) => {
+                log::error!("Error creating status: {err}");
+                let error_html = ErrorTemplate {
+                    title: "Error",
+                    error: "Was an error creating the status, please check the logs.",
+                }
+                .render()
+                .expect("template should be valid");
+                HttpResponse::Ok().body(error_html)
+            }
         }
+    } else {
+        let error_template = ErrorTemplate {
+            title: "Error",
+            error: "You must be logged in to create a status.",
+        }
+        .render()
+        .expect("template should be valid");
+        HttpResponse::Ok().body(error_template)
     }
 }
 
@@ -185,10 +178,10 @@ impl StackForm {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct StackUriPath {
-    card_uri: String,
+    stack_uri: String,
 }
 
-#[delete("/stacks/edit")]
+#[delete("/stacks/edit/{stack_uri}")]
 pub(crate) async fn delete_stack(
     request: HttpRequest,
     session: Session,
@@ -196,9 +189,74 @@ pub(crate) async fn delete_stack(
     db_pool: web::ThinData<PgPool>,
     stack_uri: web::Path<StackUriPath>,
 ) -> HttpResponse {
-    todo!()
+    if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let db_did = did.clone();
+        let StackUriPath { stack_uri } = stack_uri.into_inner();
+        match db::DbStack::is_owned_by(&db_did, &stack_uri, &db_pool).await {
+            Ok(true) => {
+                if let Err(err) = db::DbStack::delete_by_uri(&stack_uri, &db_pool).await {
+                    log::error!("Error deleting stack from db: {err}");
+                    let error_html = ErrorTemplate {
+                        title: "Error",
+                        error: "Error deleting stack from database.",
+                    }
+                    .render()
+                    .unwrap();
+                    HttpResponse::InternalServerError().body(error_html)
+                } else {
+                    let rkey = RecordKey::new(stack_uri).unwrap();
+                    let delete_result = agent
+                        .api
+                        .com
+                        .atproto
+                        .repo
+                        .delete_record(
+                            atrium_api::com::atproto::repo::delete_record::InputData {
+                                collection: Stack::NSID.parse().unwrap(),
+                                repo: did.into(),
+                                rkey,
+                                swap_commit: None,
+                                swap_record: None,
+                            }
+                            .into(),
+                        )
+                        .await;
+                    if delete_result.is_err() {
+                        log::error!("error deleting stack from repo");
+                    };
+                    Redirect::to("/")
+                        .see_other()
+                        .respond_to(&request)
+                        .map_into_boxed_body()
+                }
+            }
+            Ok(false) => {
+                let error_html = ErrorTemplate {
+                    title: "Forbidden",
+                    error: "You do not have permimssion to perform this action",
+                }
+                .render()
+                .unwrap();
+                HttpResponse::Forbidden().body(error_html)
+            }
+            Err(err) => {
+                log::error!("Error querying db: {err}");
+                let error_html = ErrorTemplate {
+                    title: "Error",
+                    error: "Error querying database",
+                }
+                .render()
+                .unwrap();
+                HttpResponse::InternalServerError().body(error_html)
+            }
+        }
+    } else {
+        log::error!("error retrieving did and agent");
+        let error_html = ErrorTemplate::session_agent_did().render().unwrap();
+        HttpResponse::Unauthorized().body(error_html)
+    }
 }
-#[put("/stacks/edit")]
+#[put("/stacks/edit/{card_uri}")]
 pub(crate) async fn put_stack(
     request: HttpRequest,
     session: Session,

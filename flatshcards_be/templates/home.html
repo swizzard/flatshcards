@@ -33,32 +33,10 @@
             {% endif %}
         </div>
         <div class="card">
-            <form action="/stacks" method="post" class="stack-form">
-                <label for="stackLabel">Stack Label</label>
-                <input type="text" id="stackLabel" name="stackLabel" placeholder="Chapter 1" required>
-                <label for="frontLang">Front Language (Optional)</label>
-                <select name="frontLang" id="frontLang">
-                    <option value="" selected>(None)</option>
-                    {% for c in lang_choices %}
-                        <option value="{{ c.0 }}">{{ c.1 }}</option>
-                    {% endfor %}
-                </select>
-                <label for="backLang">Back Language (Optional)</label>
-                <select name="backLang" id="backLang">
-                    <option value="" selected>(None)</option>
-                    {% for c in lang_choices %}
-                        <option value="{{ c.0 }}">{{ c.1 }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit">Create Stack</button>
-                {% if let Some(error) = self.error %}
-                <p class="error">Error: {{ error }}</p>
-                {% endif %}
-            </form>
-        </div>
-        <div class="card">
             {% if stacks.len() == 0 %}
-                <div class="status-line no-line">No Stacks — Why not create one?</div>
+                <div class="status-line no-line">No Stacks — Why not <a href="/stacks/create">create one?</a></div>
+            {% else %}
+                <div class="status-line no-line"><a href="/stacks/create">New stack</a></div>
             {% endif %}
             {% for stack in stacks %}
                 <div class="{% if loop.first %} status-line no-line {% else %} status-line {% endif %} ">

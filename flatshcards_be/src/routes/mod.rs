@@ -1,13 +1,18 @@
+mod atproto_agent;
 pub(crate) mod cards;
 pub(crate) mod stacks;
 pub(crate) mod user_management;
 
 pub(crate) use user_management::OAuthClientType;
 
-use crate::db;
+use crate::routes::atproto_agent::{AtS, get_session_agent_and_did};
+use crate::{
+    db,
+    templates::{HomeTemplate, Profile},
+};
 use actix_session::Session;
 use actix_web::{Responder, Result, get, web};
-use atrium_api::{agent::Agent, types::string::Did};
+use askama::Template;
 use sqlx::postgres::PgPool;
 
 #[get("/")]
@@ -18,91 +23,59 @@ pub(crate) async fn home(
 ) -> Result<impl Responder> {
     const TITLE: &str = "Home";
 
-    // If the user is signed in, get an agent which communicates with their server
-    match session.get::<String>("did").unwrap_or(None) {
-        Some(did) => {
-            let did = Did::new(did).expect("failed to parse did");
-            let stacks = db::StackDetails::user_stacks(&did, &db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    log::error!("Error loading statuses: {err}");
-                    vec![]
-                });
-            // gets the user's session from the session store to resume
-            match oauth_client.restore(&did).await {
-                Ok(session) => {
-                    //Creates an agent to make authenticated requests
-                    let agent = Agent::new(session);
-
-                    // Fetch additional information about the logged-in user
-                    let profile = agent
-                        .api
-                        .app
-                        .bsky
-                        .actor
-                        .get_profile(
-                            atrium_api::app::bsky::actor::get_profile::ParametersData {
-                                actor: atrium_api::types::string::AtIdentifier::Did(did),
-                            }
-                            .into(),
-                        )
-                        .await;
-                    let mut error = None;
-                    let mut pr = None;
-                    match profile {
-                        Ok(profile) => {
-                            pr = {
-                                let profile_data = Profile {
-                                    did: profile.did.to_string(),
-                                    display_name: profile.display_name.clone(),
-                                };
-                                Some(profile_data)
-                            }
-                        }
-                        Err(err) => {
-                            log::error!("Error accessing profile: {err}");
-                            error = Some("Can't get profile: {err}");
-                        }
-                    }
-                    let html = HomeTemplate {
-                        title: TITLE,
-                        stacks,
-                        profile: pr,
-                        lang_choices: lang_choices(),
-                        error,
-                    }
-                    .render()
-                    .expect("template should be valid");
-
-                    Ok(web::Html::new(html))
+    if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let stacks = db::StackDetails::user_stacks(&did, &db_pool)
+            .await
+            .unwrap_or_else(|err| {
+                log::error!("Error loading statuses: {err}");
+                vec![]
+            });
+        // Fetch additional information about the logged-in user
+        let profile = agent
+            .api
+            .app
+            .bsky
+            .actor
+            .get_profile(
+                atrium_api::app::bsky::actor::get_profile::ParametersData {
+                    actor: atrium_api::types::string::AtIdentifier::Did(did),
                 }
-                Err(err) => {
-                    // Destroys the system or you're in a loop
-                    session.purge();
-                    log::error!("Error restoring session: {err}");
-                    let error_html = ErrorTemplate {
-                        title: "Error",
-                        error: "Was an error resuming the session, please check the logs.",
-                    }
-                    .render()
-                    .expect("template should be valid");
-                    Ok(web::Html::new(error_html))
+                .into(),
+            )
+            .await;
+        let mut pr = None;
+        match profile {
+            Ok(profile) => {
+                pr = {
+                    let profile_data = Profile {
+                        did: profile.did.to_string(),
+                        display_name: profile.display_name.clone(),
+                    };
+                    Some(profile_data)
                 }
             }
-        }
-
-        None => {
-            let html = HomeTemplate {
-                title: TITLE,
-                profile: None,
-                stacks: Vec::new(),
-                lang_choices: lang_choices(),
-                error: None,
+            Err(err) => {
+                log::error!("Error accessing profile: {err}");
             }
-            .render()
-            .expect("template should be valid");
-
-            Ok(web::Html::new(html))
         }
+        let html = HomeTemplate {
+            title: TITLE,
+            stacks,
+            profile: pr,
+        }
+        .render()
+        .expect("template should be valid");
+
+        Ok(web::Html::new(html))
+    } else {
+        let html = HomeTemplate {
+            title: TITLE,
+            profile: None,
+            stacks: Vec::new(),
+        }
+        .render()
+        .expect("template should be valid");
+
+        Ok(web::Html::new(html))
     }
 }
