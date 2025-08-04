@@ -3,7 +3,7 @@ use crate::{
     lang::{is_lang, lang_choices},
     lexicons::{
         record::KnownRecord,
-        xyz::flatshcards::{Stack, stack},
+        xyz::flatshcards::{Card, Stack, card, stack},
     },
     routes::{AtS, OAuthClientType, get_session_agent_and_did},
     templates::{self, ErrorTemplate},
@@ -15,7 +15,7 @@ use actix_web::{
 };
 use askama::Template;
 use atrium_api::types::{
-    Collection,
+    Collection, Object,
     string::{AtIdentifier, Datetime, Did, RecordKey},
 };
 use serde::{Deserialize, Serialize};
@@ -408,7 +408,7 @@ pub(crate) async fn clone_stack(
     path: web::Path<CloneStackPath>,
 ) -> HttpResponse {
     if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
-        let db_did = did.clone();
+        let cl_did = did.clone();
         let CloneStackPath { src_uri } = path.into_inner();
         match db::DbStack::get_clone_data(&src_uri, &db_pool).await {
             Ok(Some(db::StackCloneData {
@@ -416,9 +416,86 @@ pub(crate) async fn clone_stack(
                 front_lang,
                 label,
             })) => {
-                todo!()
+                let db_bl = back_lang.clone();
+                let db_fl = front_lang.clone();
+                let db_label = label.clone();
+                let record: KnownRecord = stack::Stack {
+                    back_lang,
+                    front_lang,
+                    label,
+                    created_at: Datetime::now(),
+                }
+                .into();
+                let create_result = agent
+                    .api
+                    .com
+                    .atproto
+                    .repo
+                    .create_record(
+                        atrium_api::com::atproto::repo::create_record::InputData {
+                            collection: Stack::NSID.parse().unwrap(),
+                            repo: did.into(),
+                            rkey: None,
+                            record: record.into(),
+                            swap_commit: None,
+                            validate: None,
+                        }
+                        .into(),
+                    )
+                    .await;
+                match create_result {
+                    Ok(Object {
+                        data:
+                            atrium_api::com::atproto::repo::create_record::OutputData {
+                                uri: new_stack_uri,
+                                ..
+                            },
+                        ..
+                    }) => match db::DbCard::get_clone_data(&src_uri, &db_pool).await {
+                        Err(err) => {
+                            log::error!("error getting cards to clone {err}");
+                            let error_html = ErrorTemplate::db_query().render().unwrap();
+                            HttpResponse::InternalServerError().body(error_html)
+                        }
+                        Ok(cards) => {
+                            let nsu = new_stack_uri.clone();
+                            if let Err(err) =
+                                clone_stack_cards(cl_did, nsu, cards, &agent, &db_pool).await
+                            {
+                                log::error!("error cloning cards {err}");
+                                let error_html = ErrorTemplate {
+                                    title: "Error",
+                                    error: "An error has occurred.",
+                                }
+                                .render()
+                                .unwrap();
+                                HttpResponse::InternalServerError().body(error_html)
+                            } else {
+                                let url =
+                                    request.url_for("edit_stack_page", [new_stack_uri]).unwrap();
+                                Redirect::to(url.as_str().to_owned())
+                                    .see_other()
+                                    .respond_to(&request)
+                                    .map_into_boxed_body()
+                            }
+                        }
+                    },
+                    Err(err) => {
+                        log::error!("error cloning stack in atmosphere {err}");
+                        let error_html = ErrorTemplate {
+                            title: "Error",
+                            error: "An error has occurred.",
+                        }
+                        .render()
+                        .unwrap();
+                        HttpResponse::InternalServerError().body(error_html)
+                    }
+                }
             }
-            Ok(None) => todo!(),
+            Ok(None) => {
+                let error_html = ErrorTemplate::stack_not_found().render().unwrap();
+                HttpResponse::NotFound().body(error_html)
+            }
             Err(err) => {
                 log::error!("error getting clone data {err}");
                 let error_html = ErrorTemplate::db_query().render().unwrap();
@@ -428,5 +505,42 @@ pub(crate) async fn clone_stack(
     } else {
         let error_html = ErrorTemplate::session_agent_did().render().unwrap();
         HttpResponse::Unauthorized().body(error_html)
+    }
+}
+
+async fn clone_stack_cards(
+    did: Did,
+    new_stack_uri: String,
+    cards: Vec<db::CardCloneData>,
+    agent: &super::atproto_agent::Agent,
+    pool: &PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let any_err: Option<Box<dyn std::error::Error>> = None;
+    for db::CardCloneData { back_lang, back_text, front_lang, front_text, } in cards.iter() {
+        let now = Datetime::now();
+        let db_now = now.clone();
+        let rec: KnownRecord = card::Card {
+            back_lang,
+            back_text,
+            created_at: now
+            front_lang,
+            front_text,
+            front_text,
+            stack_id: new_stack_uri.clone()
+        }.into();
+        let create_result = agent.api.com.atproto.repo.create_record(
+            atrium_api::com::atproto::repo::create_record::InputData {
+                collection: Card::NSID.parse().unwrap(),
+                repo: did.clone().into(),
+                rkey: None,
+                record: card.into(),
+                swap_commit: None,
+                validate: None,
+            }.into()
+        ).await;
+        match create_result {
+            Ok(record) => todo!(),
+            Err(err) => todo!()
+        }
     }
 }

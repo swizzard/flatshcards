@@ -239,6 +239,40 @@ impl StackUpdateArgs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct StackDetails {
+    pub uri: String,
+    pub back_lang: Option<String>,
+    pub front_lang: Option<String>,
+    pub label: String,
+}
+
+impl StackDetails {
+    pub async fn user_stacks(did: &str, pool: &PgPool) -> Result<Vec<Self>, sqlx::Error> {
+        sqlx::query_as(
+            "
+SELECT uri, back_lang, front_lang, label FROM stack WHERE author_did = $1",
+        )
+        .bind(did)
+        .fetch_all(pool)
+        .await
+    }
+    pub fn back_lang_selected(&self, lang: &str) -> bool {
+        if let Some(ref l) = self.back_lang {
+            l == lang
+        } else {
+            lang.is_empty()
+        }
+    }
+    pub fn front_lang_selected(&self, lang: &str) -> bool {
+        if let Some(ref l) = self.front_lang {
+            l == lang
+        } else {
+            lang.is_empty()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct StackCloneData {
     pub back_lang: Option<String>,
     pub front_lang: Option<String>,
@@ -342,6 +376,20 @@ impl DbCard {
             .await?;
         Ok(())
     }
+    pub async fn get_clone_data(
+        stack_uri: &str,
+        pool: &PgPool,
+    ) -> Result<Vec<CardCloneData>, sqlx::Error> {
+        let res = sqlx::query_as(
+            "
+        SELECT back_lang, back_text, front_lang, front_text FROM card WHERE stack_id = $1
+        ",
+        )
+        .bind(stack_uri)
+        .fetch_all(pool)
+        .await?;
+        Ok(res)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,38 +426,12 @@ SELECT uri, back_lang, back_text, front_lang, front_text FROM card WHERE stack_u
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct StackDetails {
-    pub uri: String,
-    pub back_lang: Option<String>,
-    pub front_lang: Option<String>,
-    pub label: String,
-}
-
-impl StackDetails {
-    pub async fn user_stacks(did: &str, pool: &PgPool) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as(
-            "
-SELECT uri, back_lang, front_lang, label FROM stack WHERE author_did = $1",
-        )
-        .bind(did)
-        .fetch_all(pool)
-        .await
-    }
-    pub fn back_lang_selected(&self, lang: &str) -> bool {
-        if let Some(ref l) = self.back_lang {
-            l == lang
-        } else {
-            lang.is_empty()
-        }
-    }
-    pub fn front_lang_selected(&self, lang: &str) -> bool {
-        if let Some(ref l) = self.front_lang {
-            l == lang
-        } else {
-            lang.is_empty()
-        }
-    }
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct CardCloneData {
+    pub back_lang: String,
+    pub back_text: String,
+    pub front_lang: String,
+    pub front_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
