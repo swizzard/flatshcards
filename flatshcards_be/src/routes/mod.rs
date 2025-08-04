@@ -27,7 +27,7 @@ pub(crate) async fn home(
         let stacks = db::StackDetails::user_stacks(&did, &db_pool)
             .await
             .unwrap_or_else(|err| {
-                log::error!("Error loading statuses: {err}");
+                log::error!("Error loading stacks: {err}");
                 vec![]
             });
         // Fetch additional information about the logged-in user

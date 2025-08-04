@@ -16,14 +16,13 @@ use actix_web::{
 use askama::Template;
 use atrium_api::types::{
     Collection,
-    string::{Datetime, RecordKey},
+    string::{AtIdentifier, Datetime, Did, RecordKey},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 
 #[get("/stacks/create")]
 pub(crate) async fn create_stacks_page(
-    request: HttpRequest,
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
 ) -> HttpResponse {
@@ -111,7 +110,7 @@ pub(crate) async fn create_stack(
                 log::error!("Error creating status: {err}");
                 let error_html = ErrorTemplate {
                     title: "Error",
-                    error: "Was an error creating the status, please check the logs.",
+                    error: "There was an error creating the stack",
                 }
                 .render()
                 .expect("template should be valid");
@@ -121,7 +120,7 @@ pub(crate) async fn create_stack(
     } else {
         let error_template = ErrorTemplate {
             title: "Error",
-            error: "You must be logged in to create a status.",
+            error: "You must be logged in to create a stack.",
         }
         .render()
         .expect("template should be valid");
@@ -174,11 +173,67 @@ impl StackForm {
         }
         .into()
     }
+    fn to_update_args(&self, uri: String, author_did: String) -> db::StackUpdateArgs {
+        db::StackUpdateArgs {
+            uri,
+            author_did,
+            back_lang: self.back_lang.clone(),
+            front_lang: self.front_lang.clone(),
+            label: self.stack_label.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct StackUriPath {
     stack_uri: String,
+}
+
+#[get("/stacks/edit/{stack_uri}")]
+pub(crate) async fn edit_stack_page(
+    session: Session,
+    oauth_client: web::Data<OAuthClientType>,
+    db_pool: web::ThinData<PgPool>,
+    stack_uri: web::Path<StackUriPath>,
+) -> HttpResponse {
+    if let Some(AtS { did, .. }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let StackUriPath { stack_uri } = stack_uri.into_inner();
+        match db::DbStack::get_owned_by(&did, &stack_uri, &db_pool).await {
+            Ok(Some(stack)) => {
+                let html = templates::EditStackTemplate {
+                    title: "Edit Stack",
+                    lang_choices: lang_choices(),
+                    stack,
+                    error: None,
+                }
+                .render()
+                .unwrap();
+                HttpResponse::Ok().body(html)
+            }
+            Ok(None) => {
+                let error_html = ErrorTemplate::stack_not_found().render().unwrap();
+                HttpResponse::NotFound().body(error_html)
+            }
+            Err(err) => {
+                log::error!("error retrieving stack {err}");
+                let error_html = ErrorTemplate {
+                    title: "Error",
+                    error: "Error retrieving stack",
+                }
+                .render()
+                .unwrap();
+                HttpResponse::InternalServerError().body(error_html)
+            }
+        }
+    } else {
+        let error_html = ErrorTemplate {
+            title: "Error",
+            error: "You must be logged in to edit stacks",
+        }
+        .render()
+        .unwrap();
+        HttpResponse::Unauthorized().body(error_html)
+    }
 }
 
 #[delete("/stacks/edit/{stack_uri}")]
@@ -231,22 +286,12 @@ pub(crate) async fn delete_stack(
                 }
             }
             Ok(false) => {
-                let error_html = ErrorTemplate {
-                    title: "Forbidden",
-                    error: "You do not have permimssion to perform this action",
-                }
-                .render()
-                .unwrap();
+                let error_html = ErrorTemplate::forbidden().render().unwrap();
                 HttpResponse::Forbidden().body(error_html)
             }
             Err(err) => {
                 log::error!("Error querying db: {err}");
-                let error_html = ErrorTemplate {
-                    title: "Error",
-                    error: "Error querying database",
-                }
-                .render()
-                .unwrap();
+                let error_html = ErrorTemplate::db_query().render().unwrap();
                 HttpResponse::InternalServerError().body(error_html)
             }
         }
@@ -258,29 +303,130 @@ pub(crate) async fn delete_stack(
 }
 #[put("/stacks/edit/{card_uri}")]
 pub(crate) async fn put_stack(
-    request: HttpRequest,
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
     db_pool: web::ThinData<PgPool>,
     stack_uri: web::Path<StackUriPath>,
     form: web::Form<StackForm>,
 ) -> HttpResponse {
-    todo!()
+    if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let form = form.clone();
+        let db_form = form.clone();
+        let db_did = did.clone();
+        let StackUriPath { stack_uri } = stack_uri.into_inner();
+        let db_uri = stack_uri.clone();
+        match db::DbStack::is_owned_by(&db_did, &stack_uri, &db_pool).await {
+            Ok(true) => {
+                let update_result = agent
+                    .api
+                    .com
+                    .atproto
+                    .repo
+                    .put_record(
+                        atrium_api::com::atproto::repo::put_record::InputData {
+                            collection: Stack::NSID.parse().unwrap(),
+                            record: form.to_record().into(),
+                            repo: did.into(),
+                            rkey: RecordKey::new(stack_uri).unwrap(),
+                            swap_commit: None,
+                            swap_record: None,
+                            validate: None,
+                        }
+                        .into(),
+                    )
+                    .await;
+                if let Err(err) = update_result {
+                    log::error!("error updating stack in atmosphere {err}");
+                    let error_html = ErrorTemplate {
+                        title: "Error",
+                        error: "Error updating stack",
+                    }
+                    .render()
+                    .unwrap();
+                    HttpResponse::InternalServerError().body(error_html)
+                } else {
+                    match db_form
+                        .to_update_args(db_uri, db_did.to_string())
+                        .update_owned(&db_pool)
+                        .await
+                    {
+                        Ok(Some(updated)) => {
+                            let html = templates::EditStackTemplate {
+                                title: "Edit Stack",
+                                lang_choices: lang_choices(),
+                                stack: updated,
+                                error: None,
+                            }
+                            .render()
+                            .unwrap();
+                            HttpResponse::Ok().body(html)
+                        }
+                        Ok(None) => {
+                            let error_html = ErrorTemplate::forbidden().render().unwrap();
+                            HttpResponse::Forbidden().body(error_html)
+                        }
+                        Err(err) => {
+                            log::error!("error updating stack {err}");
+                            let error_html = ErrorTemplate {
+                                title: "Error",
+                                error: "Error updating stack",
+                            }
+                            .render()
+                            .unwrap();
+                            HttpResponse::InternalServerError().body(error_html)
+                        }
+                    }
+                }
+            }
+            Ok(false) => {
+                let error_html = ErrorTemplate::forbidden().render().unwrap();
+                HttpResponse::Forbidden().body(error_html)
+            }
+            Err(err) => {
+                log::error!("error querying database {err}");
+                let error_html = ErrorTemplate::db_query().render().unwrap();
+                HttpResponse::InternalServerError().body(error_html)
+            }
+        }
+    } else {
+        let error_html = ErrorTemplate::session_agent_did().render().unwrap();
+        HttpResponse::Unauthorized().body(error_html)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct CloneStackForm {
+pub(crate) struct CloneStackPath {
     src_uri: String,
-    dest_uri: String,
 }
 
-#[post("/stacks/clone")]
+#[post("/stacks/clone/{src_uri}")]
 pub(crate) async fn clone_stack(
     request: HttpRequest,
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
     db_pool: web::ThinData<PgPool>,
-    form: web::Form<CloneStackForm>,
+    path: web::Path<CloneStackPath>,
 ) -> HttpResponse {
-    todo!()
+    if let Some(AtS { agent, did }) = get_session_agent_and_did(&oauth_client, &session).await {
+        let db_did = did.clone();
+        let CloneStackPath { src_uri } = path.into_inner();
+        match db::DbStack::get_clone_data(&src_uri, &db_pool).await {
+            Ok(Some(db::StackCloneData {
+                back_lang,
+                front_lang,
+                label,
+            })) => {
+                todo!()
+            }
+            Ok(None) => todo!(),
+            Err(err) => {
+                log::error!("error getting clone data {err}");
+                let error_html = ErrorTemplate::db_query().render().unwrap();
+                HttpResponse::InternalServerError().body(error_html)
+            }
+        }
+    } else {
+        let error_html = ErrorTemplate::session_agent_did().render().unwrap();
+        HttpResponse::Unauthorized().body(error_html)
+    }
 }

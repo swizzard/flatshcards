@@ -177,6 +177,28 @@ impl DbStack {
         .await
         .map(|r| r.get("exists"))
     }
+    pub async fn get_owned_by(
+        author_did: &str,
+        stack_uri: &str,
+        pool: &PgPool,
+    ) -> Result<Option<StackDetails>, sqlx::Error> {
+        sqlx::query_as(
+        "SELECT uri, back_lang, front_lang, label FROM stack WHERE author_did = $1 AND uri = $2 LIMIT 1"
+        ).bind(author_did).bind(stack_uri).fetch_optional(pool).await
+    }
+    pub async fn get_clone_data(
+        stack_uri: &str,
+        pool: &PgPool,
+    ) -> Result<Option<StackCloneData>, sqlx::Error> {
+        sqlx::query_as(
+            "
+        SELECT back_lang, front_lang, label FROM stack WHERE uri = $1 LIMIT 1
+        ",
+        )
+        .bind(stack_uri)
+        .fetch_optional(pool)
+        .await
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +209,40 @@ pub struct StackArgs {
     pub front_lang: Option<String>,
     pub label: String,
     pub indexed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StackUpdateArgs {
+    pub uri: String,
+    pub author_did: String,
+    pub back_lang: Option<String>,
+    pub front_lang: Option<String>,
+    pub label: String,
+}
+
+impl StackUpdateArgs {
+    pub async fn update_owned(&self, pool: &PgPool) -> Result<Option<StackDetails>, sqlx::Error> {
+        let res = sqlx::query_as(
+            "
+    UPDATE stack SET back_lang = $3, front_lang = $4, label = $5 WHERE uri = $1 AND author_did = $2
+    RETURNING uri, back_lang, front_lang, label",
+        )
+        .bind(&self.uri)
+        .bind(&self.author_did)
+        .bind(&self.back_lang)
+        .bind(&self.front_lang)
+        .bind(&self.label)
+        .fetch_optional(pool)
+        .await?;
+        Ok(res)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct StackCloneData {
+    pub back_lang: Option<String>,
+    pub front_lang: Option<String>,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -339,6 +395,20 @@ SELECT uri, back_lang, front_lang, label FROM stack WHERE author_did = $1",
         .bind(did)
         .fetch_all(pool)
         .await
+    }
+    pub fn back_lang_selected(&self, lang: &str) -> bool {
+        if let Some(ref l) = self.back_lang {
+            l == lang
+        } else {
+            lang.is_empty()
+        }
+    }
+    pub fn front_lang_selected(&self, lang: &str) -> bool {
+        if let Some(ref l) = self.front_lang {
+            l == lang
+        } else {
+            lang.is_empty()
+        }
     }
 }
 

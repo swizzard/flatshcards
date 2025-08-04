@@ -39,6 +39,24 @@ impl<'a> ErrorTemplate<'a> {
             error: "Error retrieving AtProto agent",
         }
     }
+    pub fn stack_not_found() -> Self {
+        Self {
+            title: "Error",
+            error: "Stack not found",
+        }
+    }
+    pub fn forbidden() -> Self {
+        Self {
+            title: "Forbidden",
+            error: "You do not have permission to perform this action",
+        }
+    }
+    pub fn db_query() -> Self {
+        Self {
+            title: "Error",
+            error: "Error querying database",
+        }
+    }
 }
 
 #[derive(Template)]
@@ -49,19 +67,11 @@ pub struct CreateStackTemplate<'a> {
     pub error: Option<&'a str>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct EditStack<'a> {
-    pub uri: &'a str,
-    pub label: &'a str,
-    pub front_lang: &'a str,
-    pub back_lang: &'a str,
-}
-
 #[derive(Template)]
 #[template(path = "edit_stack.html")]
 pub struct EditStackTemplate<'a> {
     pub title: &'a str,
     pub lang_choices: Vec<(&'a str, &'a str)>,
-    pub stack: EditStack<'a>,
+    pub stack: db::StackDetails,
     pub error: Option<&'a str>,
 }
