@@ -74,4 +74,22 @@ pub struct EditStackTemplate<'a> {
     pub lang_choices: Vec<(&'a str, &'a str)>,
     pub stack: db::StackDetails,
     pub error: Option<&'a str>,
+    pub add_card: AddCardTemplate<'a>,
+    pub edit_cards: EditCardsTemplate<'a>,
+}
+
+#[derive(Template)]
+#[template(path = "add_card.html")]
+pub struct AddCardTemplate<'a> {
+    pub lang_choices: Vec<(&'a str, &'a str)>,
+    pub stack: db::StackDetails,
+    pub error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "edit_cards.html")]
+pub struct EditCardsTemplate<'a> {
+    pub lang_choices: Vec<(&'a str, &'a str)>,
+    pub cards: Vec<db::DisplayCard>,
+    pub stack_id: String,
 }

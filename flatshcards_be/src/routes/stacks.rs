@@ -201,15 +201,52 @@ pub(crate) async fn edit_stack_page(
         let StackUriPath { stack_uri } = stack_uri.into_inner();
         match db::DbStack::get_owned_by(&did, &stack_uri, &db_pool).await {
             Ok(Some(stack)) => {
-                let html = templates::EditStackTemplate {
-                    title: "Edit Stack",
-                    lang_choices: lang_choices(),
-                    stack,
+                let lc = lang_choices();
+                let st = stack.clone();
+                let stack_id = st.uri.clone();
+                let add_card = templates::AddCardTemplate {
+                    lang_choices: lc.clone(),
+                    stack: st,
                     error: None,
+                };
+                match db::DisplayCard::stack_cards(&stack_uri, &db_pool).await {
+                    Err(err) => {
+                        log::error!("error retrieving cards from db {err}");
+                        let html = templates::EditStackTemplate {
+                            title: "Edit Stack",
+                            lang_choices: lc.clone(),
+                            stack,
+                            error: Some(err.to_string().as_ref()),
+                            add_card,
+                            edit_cards: templates::EditCardsTemplate {
+                                lang_choices: lc.clone(),
+                                cards: Vec::new(),
+                                stack_id,
+                            },
+                        }
+                        .render()
+                        .unwrap();
+                        HttpResponse::BadRequest().body(html)
+                    }
+                    Ok(cards) => {
+                        let stack_id = stack.uri.clone();
+                        let html = templates::EditStackTemplate {
+                            title: "Edit Stack",
+                            lang_choices: lc.clone(),
+                            stack,
+                            error: None,
+                            add_card,
+                            edit_cards: templates::EditCardsTemplate {
+                                lang_choices: lc.clone(),
+                                cards,
+                                stack_id,
+                            },
+                        }
+                        .render()
+                        .unwrap();
+                        HttpResponse::Ok().body(html)
+                    }
                 }
-                .render()
-                .unwrap();
-                HttpResponse::Ok().body(html)
             }
             Ok(None) => {
                 let error_html = ErrorTemplate::stack_not_found().render().unwrap();
@@ -328,7 +365,7 @@ pub(crate) async fn put_stack(
                             collection: Stack::NSID.parse().unwrap(),
                             record: form.to_record().into(),
                             repo: did.into(),
-                            rkey: RecordKey::new(stack_uri).unwrap(),
+                            rkey: RecordKey::new(stack_uri.clone()).unwrap(),
                             swap_commit: None,
                             swap_record: None,
                             validate: None,
@@ -352,15 +389,52 @@ pub(crate) async fn put_stack(
                         .await
                     {
                         Ok(Some(updated)) => {
-                            let html = templates::EditStackTemplate {
-                                title: "Edit Stack",
-                                lang_choices: lang_choices(),
-                                stack: updated,
-                                error: None,
+                            let lc = lang_choices();
+                            match db::DisplayCard::stack_cards(&stack_uri, &db_pool).await {
+                                Err(err) => {
+                                    log::error!("error retrieving post-update stack cards {err}");
+                                    let html = templates::EditStackTemplate {
+                                        title: "Edit Stack",
+                                        lang_choices: lc.clone(),
+                                        stack: updated.clone(),
+                                        error: Some("Could not retrieve cards, please try again."),
+                                        add_card: templates::AddCardTemplate {
+                                            lang_choices: lc.clone(),
+                                            stack: updated.clone(),
+                                            error: None,
+                                        },
+                                        edit_cards: templates::EditCardsTemplate {
+                                            lang_choices: lc.clone(),
+                                            cards: Vec::new(),
+                                            stack_id: updated.uri.clone(),
+                                        },
+                                    }
+                                    .render()
+                                    .unwrap();
+                                    HttpResponse::BadRequest().body(html)
+                                }
+                                Ok(cards) => {
+                                    let html = templates::EditStackTemplate {
+                                        title: "Edit Stack",
+                                        lang_choices: lc.clone(),
+                                        stack: updated.clone(),
+                                        error: None,
+                                        add_card: templates::AddCardTemplate {
+                                            lang_choices: lc.clone(),
+                                            stack: updated.clone(),
+                                            error: None,
+                                        },
+                                        edit_cards: templates::EditCardsTemplate {
+                                            lang_choices: lc.clone(),
+                                            cards,
+                                            stack_id: updated.uri.clone(),
+                                        },
+                                    }
+                                    .render()
+                                    .unwrap();
+                                    HttpResponse::Ok().body(html)
+                                }
                             }
-                            .render()
-                            .unwrap();
-                            HttpResponse::Ok().body(html)
                         }
                         Ok(None) => {
                             let error_html = ErrorTemplate::forbidden().render().unwrap();
@@ -417,9 +491,6 @@ pub(crate) async fn clone_stack(
                 front_lang,
                 label,
             })) => {
-                let db_bl = back_lang.clone();
-                let db_fl = front_lang.clone();
-                let db_label = label.clone();
                 let record: KnownRecord = stack::Stack {
                     back_lang,
                     front_lang,

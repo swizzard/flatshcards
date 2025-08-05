@@ -427,6 +427,12 @@ SELECT uri, back_lang, back_text, front_lang, front_text FROM card WHERE stack_u
         .fetch_all(pool)
         .await
     }
+    pub fn front_lang_selected(&self, lang: &str) -> bool {
+        &self.front_text == lang
+    }
+    pub fn back_lang_selected(&self, lang: &str) -> bool {
+        &self.back_text == lang
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]

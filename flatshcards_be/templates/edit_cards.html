@@ -1,0 +1,39 @@
+<div id="editCards">
+  {% for card in cards %}
+  <div class="edit-card">
+    <form data-card-uri="{{ card.uri }}">
+      <div class="card-fields">
+        <select required name="frontLang" class="card-lang">
+          {% for c in lang_choices %}
+          <option value="{{ c.0 }}" {% if card.front_lang_selected(c.0) %} selected {% endif %}>
+          {{ c. 1 }}
+          </option>
+          {% endfor %}
+        </select>
+        
+        <label for="frontText" class="card-text-label">Front Text</label>
+        <input required type="text" class="card-text" id="frontText" name="frontText" value="{{ card.front_text }}"/>
+        <label for="backLang" class="card-lang-label">Back Language</label>
+        <select required name="backLang" class="card-lang">
+          <option value=""
+              {% if card.back_lang_selected("") %} selected {% endif %}
+            >Please choose a language
+          </option>
+          {% for c in lang_choices %}
+          <option value="{{ c.0 }}" {% if card.back_lang_selected(c.0) %} selected {% endif %}>
+          {{ c.1 }}
+          </option>
+          {% endfor %}
+        </select>
+        <label for="backText" class="card-text-label">Back Text</label>
+        <input required type="text" class="card-text" id="backText" name="backText" value="{{ card.back_text }}"/>
+        <input hidden name="stackId" value="{{ stack_id }}" />
+      </div>
+      <div class="card-buttons">
+        <button hx-put="/cards/edit/{{ card.uri }}">Update Card</button>
+        <button hx-delete="/cards/edit/{{ card.uri }}" hx-swap="outerHtml" hx-confirm="Are you sure you want to delete this card?">Delete Card</button>
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+</div>
