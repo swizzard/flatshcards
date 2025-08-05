@@ -14,9 +14,10 @@ use actix_web::{
     web::{self, Redirect},
 };
 use askama::Template;
+use atrium_api::com::atproto::repo::{create_record, delete_record, put_record};
 use atrium_api::types::{
     Collection, Object,
-    string::{AtIdentifier, Datetime, Did, RecordKey},
+    string::{Datetime, Did, RecordKey},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
@@ -84,7 +85,7 @@ pub(crate) async fn create_stack(
             .atproto
             .repo
             .create_record(
-                atrium_api::com::atproto::repo::create_record::InputData {
+                create_record::InputData {
                     collection: Stack::NSID.parse().unwrap(),
                     repo: did.into(),
                     rkey: None,
@@ -266,7 +267,7 @@ pub(crate) async fn delete_stack(
                         .atproto
                         .repo
                         .delete_record(
-                            atrium_api::com::atproto::repo::delete_record::InputData {
+                            delete_record::InputData {
                                 collection: Stack::NSID.parse().unwrap(),
                                 repo: did.into(),
                                 rkey,
@@ -323,7 +324,7 @@ pub(crate) async fn put_stack(
                     .atproto
                     .repo
                     .put_record(
-                        atrium_api::com::atproto::repo::put_record::InputData {
+                        put_record::InputData {
                             collection: Stack::NSID.parse().unwrap(),
                             record: form.to_record().into(),
                             repo: did.into(),
@@ -432,7 +433,7 @@ pub(crate) async fn clone_stack(
                     .atproto
                     .repo
                     .create_record(
-                        atrium_api::com::atproto::repo::create_record::InputData {
+                        create_record::InputData {
                             collection: Stack::NSID.parse().unwrap(),
                             repo: did.into(),
                             rkey: None,
@@ -446,9 +447,8 @@ pub(crate) async fn clone_stack(
                 match create_result {
                     Ok(Object {
                         data:
-                            atrium_api::com::atproto::repo::create_record::OutputData {
-                                uri: new_stack_uri,
-                                ..
+                            create_record::OutputData {
+                                uri: new_stack_uri, ..
                             },
                         ..
                     }) => match db::DbCard::get_clone_data(&src_uri, &db_pool).await {
@@ -515,32 +515,76 @@ async fn clone_stack_cards(
     agent: &super::atproto_agent::Agent,
     pool: &PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let any_err: Option<Box<dyn std::error::Error>> = None;
-    for db::CardCloneData { back_lang, back_text, front_lang, front_text, } in cards.iter() {
+    let mut any_err: Option<Box<dyn std::error::Error>> = None;
+    let mut work: std::collections::VecDeque<db::CardCloneData> = cards.into();
+    while !work.is_empty() {
+        let clone_data = work.pop_front().unwrap();
         let now = Datetime::now();
         let db_now = now.clone();
+        let record_uri = new_stack_uri.clone();
+        let db_uri = new_stack_uri.clone();
+        let db_did = did.clone();
         let rec: KnownRecord = card::Card {
-            back_lang,
-            back_text,
-            created_at: now
-            front_lang,
-            front_text,
-            front_text,
-            stack_id: new_stack_uri.clone()
-        }.into();
-        let create_result = agent.api.com.atproto.repo.create_record(
-            atrium_api::com::atproto::repo::create_record::InputData {
-                collection: Card::NSID.parse().unwrap(),
-                repo: did.clone().into(),
-                rkey: None,
-                record: card.into(),
-                swap_commit: None,
-                validate: None,
-            }.into()
-        ).await;
-        match create_result {
-            Ok(record) => todo!(),
-            Err(err) => todo!()
+            back_lang: clone_data.back_lang.clone(),
+            back_text: clone_data.back_text.clone(),
+            created_at: now,
+            front_lang: clone_data.front_lang.clone(),
+            front_text: clone_data.front_text.clone(),
+            stack_id: RecordKey::new(record_uri).unwrap(),
         }
+        .into();
+        let create_result = agent
+            .api
+            .com
+            .atproto
+            .repo
+            .create_record(
+                create_record::InputData {
+                    collection: Card::NSID.parse().unwrap(),
+                    repo: did.clone().into(),
+                    rkey: None,
+                    record: rec.into(),
+                    swap_commit: None,
+                    validate: None,
+                }
+                .into(),
+            )
+            .await;
+        match create_result {
+            Ok(Object {
+                data: create_record::OutputData { uri, .. },
+                ..
+            }) => {
+                let indexed_at: Option<chrono::DateTime<chrono::Utc>> =
+                    Some(db_now.as_ref().to_utc());
+                if let Err(err) = db::DbCard::new(db::CardArgs {
+                    uri,
+                    author_did: db_did.into(),
+                    back_lang: clone_data.back_lang.clone(),
+                    back_text: clone_data.back_text.clone(),
+                    front_lang: clone_data.front_lang.clone(),
+                    front_text: clone_data.front_text.clone(),
+                    indexed_at,
+                    stack_id: db_uri.clone(),
+                })
+                .save(pool)
+                .await
+                {
+                    log::error!("error saving card in db, will ingest later {err}");
+                };
+            }
+            Err(err) => {
+                log::error!("error saving card in atmosphere, will try again {err}");
+                if any_err.is_none() {
+                    any_err.replace(Box::new(err));
+                }
+                work.push_back(clone_data)
+            }
+        }
+    }
+    if let Some(err) = any_err {
+        Err(err)
+    } else {
+        Ok(())
     }
 }

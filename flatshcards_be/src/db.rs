@@ -293,7 +293,7 @@ pub struct DbCard {
 }
 
 impl DbCard {
-    fn new(
+    pub fn new(
         CardArgs {
             uri,
             author_did,
@@ -340,6 +340,9 @@ impl DbCard {
         .execute(executor)
         .await?;
         Ok(())
+    }
+    pub async fn save(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+        self.save_with_executor(pool).await
     }
     pub async fn upsert(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
         let mut tx = pool.begin().await?;
