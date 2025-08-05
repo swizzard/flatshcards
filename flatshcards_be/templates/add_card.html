@@ -1,4 +1,14 @@
-<form action="/cards/create" method="post" id="createCard">
+<form id="createCard"
+  hx-on::before-swap="
+  if (event.detail.isError) {
+    event.detail.target = document.getElementById('createError');
+    event.detail.shouldSwap = true;
+  } else {
+    event.detail.target = document.getElementById('editCards');
+    event.detail.swapOverride = 'afterBegin';
+    this.reset();
+  }"
+  >
   <div id="createCardFields" class="card-fields">
     <label for="frontLang" class="card-lang-label">Front Language</label>
     <select required name="frontLang" id="frontLang" class="card-lang">
@@ -31,10 +41,10 @@
     <input type="hidden" name="stackId" value="{{ stack.uri }}" />
   </div>
   <div id="createCardButton" class="card-buttons">
-    <button type="submit">Create Card</button>
+    <button hx-post="/cards/create">Create Card</button>
   </div>
   {% if let Some(err) = error %}
-  <div class="form-error">
+  <div id="createError" class="form-error">
     {{ err }}
   </div>
   {% endif %}

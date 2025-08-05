@@ -93,3 +93,9 @@ pub struct EditCardsTemplate<'a> {
     pub cards: Vec<db::DisplayCard>,
     pub stack_id: String,
 }
+
+#[derive(Template)]
+#[template(path = "form_error.html")]
+pub struct FormError<'a> {
+    pub error: &'a str,
+}
