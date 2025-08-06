@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPool;
 
 #[get("/stacks/create")]
-pub(crate) async fn create_stacks_page(
+pub(crate) async fn create_stack_page(
     session: Session,
     oauth_client: web::Data<OAuthClientType>,
 ) -> HttpResponse {

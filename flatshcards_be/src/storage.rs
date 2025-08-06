@@ -49,7 +49,7 @@ where
                     .map_err(|_| DbStoreError::InvalidSession)?;
                 Ok(Some(deserialized_session))
             }
-            Ok(None) => Err(DbStoreError::NoSessionFound),
+            Ok(None) => Ok(None),
             Err(db_error) => {
                 log::error!("Database error: {db_error}");
                 Err(DbStoreError::DatabaseError(db_error))
@@ -104,13 +104,14 @@ where
     type Error = DbStoreError;
     async fn get(&self, key: &K) -> Result<Option<V>, Self::Error> {
         let key = key.as_ref();
+        log::info!("state store get key {key}");
         match AuthState::get_by_key(key, &self.db_pool).await {
             Ok(Some(auth_state)) => {
                 let deserialized_state: V = serde_json::from_str(&auth_state.state)
                     .map_err(|_| DbStoreError::InvalidSession)?;
                 Ok(Some(deserialized_state))
             }
-            Ok(None) => Err(DbStoreError::NoSessionFound),
+            Ok(None) => Ok(None),
             Err(db_error) => {
                 log::error!("Database error: {db_error}");
                 Err(DbStoreError::DatabaseError(db_error))

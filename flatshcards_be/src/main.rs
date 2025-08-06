@@ -4,7 +4,9 @@ use crate::{
     routes::{
         cards::{create_card, delete_card, put_card},
         home,
-        stacks::{clone_stack, create_stack, delete_stack, put_stack},
+        stacks::{
+            clone_stack, create_stack, create_stack_page, delete_stack, edit_stack_page, put_stack,
+        },
         user_management::{login, login_post, logout, oauth_callback},
     },
     storage::{DbSessionStore, DbStateStore},
@@ -116,7 +118,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(middleware::Logger::default())
             .app_data(web::Data::new(client.clone()))
-            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::ThinData(pool.clone()))
             .app_data(web::Data::new(handle_resolver.clone()))
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), Key::from(&[0; 64]))
@@ -139,7 +141,9 @@ async fn main() -> std::io::Result<()> {
             .service(put_card)
             .service(clone_stack)
             .service(create_stack)
+            .service(create_stack_page)
             .service(delete_stack)
+            .service(edit_stack_page)
             .service(put_stack)
     })
     .bind(("127.0.0.1", port))?

@@ -132,28 +132,20 @@ impl DbStack {
         Ok(())
     }
     pub async fn upsert(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query("SELECT uri FROM stack WHERE uri = $1")
-            .bind(&self.uri)
-            .fetch_optional(&mut *tx)
-            .await?;
-        if existing.is_some() {
-            sqlx::query(
-                "
-    UPDATE stack SET author_did = $2, back_lang = $3, front_lang = $4, label = $5, indexed_at = $6
-    WHERE uri = $1",
-            )
-            .bind(&self.uri)
-            .bind(&self.author_did)
-            .bind(&self.back_lang)
-            .bind(&self.front_lang)
-            .bind(self.indexed_at)
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            self.save_with_executor(&mut *tx).await?;
-        }
-        tx.commit().await?;
+        sqlx::query(
+            "
+      INSERT INTO stack (uri, author_did, back_lang, front_lang, label, created_at, indexed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT UPDATE;
+    ",
+        )
+        .bind(&self.uri)
+        .bind(&self.author_did)
+        .bind(&self.back_lang)
+        .bind(&self.front_lang)
+        .bind(self.created_at)
+        .bind(self.indexed_at)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn delete_by_uri(uri: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -345,31 +337,23 @@ impl DbCard {
         self.save_with_executor(pool).await
     }
     pub async fn upsert(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query("SELECT uri FROM card WHERE uri = $1")
-            .bind(&self.uri)
-            .fetch_optional(&mut *tx)
-            .await?;
-        if existing.is_some() {
-            sqlx::query(
-                "
-    UPDATE card SET author_did = $2, back_lang = $3, front_lang = $4, label = $5, indexed_at = $6, stack_id = $7
-    WHERE uri = $1",
-            )
-            .bind(&self.uri)
-            .bind(&self.author_did)
-            .bind(&self.back_lang)
-            .bind(&self.back_text)
-            .bind(&self.front_lang)
-            .bind(&self.front_text)
-            .bind(self.indexed_at)
-            .bind(&self.stack_id)
-            .execute(&mut *tx)
-            .await?;
-        } else {
-            self.save_with_executor(&mut *tx).await?;
-        }
-        tx.commit().await?;
+        sqlx::query(
+            "
+      INSERT INTO card (uri, author_did, back_lang, back_text, front_lang, front_text, created_at, indexed_at, stack_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO UPDATE;
+    ",
+        )
+        .bind(&self.uri)
+        .bind(&self.author_did)
+        .bind(&self.back_lang)
+        .bind(&self.back_text)
+        .bind(&self.front_lang)
+        .bind(&self.front_text)
+        .bind(self.created_at)
+        .bind(self.indexed_at)
+        .bind(&self.stack_id)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn delete_by_uri(uri: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -491,24 +475,13 @@ SELECT key, session FROM auth_session WHERE key = $1 LIMIT 1
         .await
     }
     pub async fn save_or_update(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query("SELECT key FROM auth_session WHERE key = $1")
-            .bind(&self.key)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let q = if existing.is_some() {
-            sqlx::query(
-                "
-UPDATE auth_session SET session = $2 WHERE key = $1
-",
-            )
-        } else {
-            sqlx::query("INSERT INTO auth_session (key, session) VALUES ($1, $2)")
-        };
-        q.bind(&self.key)
-            .bind(&self.session)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO auth_session (key, session) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(&self.key)
+        .bind(&self.session)
+        .execute(pool)
+        .await?;
         Ok(())
     }
     pub async fn delete_all(pool: &PgPool) -> Result<(), sqlx::Error> {
@@ -538,23 +511,10 @@ impl AuthState {
         Self { key, state }
     }
     pub async fn save_or_update(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query("SELECT key FROM auth_state WHERE key = $1")
+        sqlx::query("INSERT INTO auth_state (key, state) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(&self.key)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let q = if existing.is_some() {
-            sqlx::query(
-                "
-UPDATE auth_state SET state = $2 WHERE key = $1
-",
-            )
-        } else {
-            sqlx::query("INSERT INTO auth_state (key, state) VALUES ($1, $2)")
-        };
-        q.bind(&self.key)
             .bind(&self.state)
-            .execute(&mut *tx)
+            .execute(pool)
             .await?;
         Ok(())
     }
@@ -565,7 +525,7 @@ UPDATE auth_state SET state = $2 WHERE key = $1
     pub async fn get_by_key(key: &str, pool: &PgPool) -> Result<Option<Self>, sqlx::Error> {
         let res = sqlx::query_as(
             "
-        SELECT key, session FROM auth_state WHERE key = $1 LIMIT 1
+        SELECT key, state FROM auth_state WHERE key = $1 LIMIT 1
                 ",
         )
         .bind(key)

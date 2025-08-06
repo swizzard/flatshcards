@@ -35,9 +35,11 @@ pub(crate) async fn oauth_callback(
     oauth_client: web::Data<OAuthClientType>,
     session: Session,
 ) -> HttpResponse {
+    log::info!("oauth callback");
     //Processes the call back and parses out a session if found and valid
     match oauth_client.callback(params.into_inner()).await {
         Ok((bsky_session, _)) => {
+            log::info!("got session");
             let agent = Agent::new(bsky_session);
             match agent.did().await {
                 Some(did) => {
