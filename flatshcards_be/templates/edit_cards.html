@@ -1,7 +1,7 @@
 <div id="editCards">
   {% for card in cards %}
-  <div class="edit-card">
-    <form data-card-uri="{{ card.uri }}">
+  <div class="edit-card" data-card-uri="{{ card.uri }}">
+    <form>
       <div class="card-fields">
         <select required name="frontLang" class="card-lang">
           {% for c in lang_choices %}
@@ -30,10 +30,11 @@
         <input hidden name="stackId" value="{{ stack_id }}" />
       </div>
       <div class="card-buttons">
-        <button hx-put="/cards/edit/{{ card.uri }}">Update Card</button>
+        <button hx-put="/cards/edit/{{ card.uri }}" hx-target="closest div.edit-card">Update Card</button>
         <button hx-delete="/cards/edit/{{ card.uri }}" hx-swap="outerHtml" hx-confirm="Are you sure you want to delete this card?">Delete Card</button>
       </div>
     </form>
+    <div class="form-error"></div>
   </div>
   {% endfor %}
 </div>

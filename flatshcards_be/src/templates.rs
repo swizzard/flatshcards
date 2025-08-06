@@ -95,6 +95,14 @@ pub struct EditCardsTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "edit_single_card.html")]
+pub struct EditSingleCardTemplate<'a> {
+    pub lang_choices: Vec<(&'a str, &'a str)>,
+    pub card: db::DisplayCard,
+    pub stack_id: String,
+}
+
+#[derive(Template)]
 #[template(path = "form_error.html")]
 pub struct FormError<'a> {
     pub error: &'a str,

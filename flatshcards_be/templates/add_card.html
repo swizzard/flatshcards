@@ -1,4 +1,5 @@
 <form id="createCard"
+      class="card-form"
   hx-on::before-swap="
   if (event.detail.isError) {
     event.detail.target = document.getElementById('createError');

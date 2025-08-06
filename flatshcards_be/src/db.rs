@@ -379,6 +379,20 @@ impl DbCard {
             .await?;
         Ok(())
     }
+    pub async fn is_owned_by(
+        author_did: &str,
+        card_uri: &str,
+        pool: &PgPool,
+    ) -> Result<bool, sqlx::Error> {
+        sqlx::query(
+            r#"SELECT EXISTS(SELECT 1 FROM card WHERE author_did = $1 AND uri = $2) AS "exists"#,
+        )
+        .bind(author_did)
+        .bind(card_uri)
+        .fetch_one(pool)
+        .await
+        .map(|r| r.get("exists"))
+    }
     pub async fn get_clone_data(
         stack_uri: &str,
         pool: &PgPool,
@@ -428,10 +442,22 @@ SELECT uri, back_lang, back_text, front_lang, front_text FROM card WHERE stack_u
         .await
     }
     pub fn front_lang_selected(&self, lang: &str) -> bool {
-        &self.front_text == lang
+        self.front_text == lang
     }
     pub fn back_lang_selected(&self, lang: &str) -> bool {
-        &self.back_text == lang
+        self.back_text == lang
+    }
+}
+
+impl From<DbCard> for DisplayCard {
+    fn from(val: DbCard) -> Self {
+        Self {
+            uri: val.uri,
+            back_lang: val.back_lang,
+            back_text: val.back_text,
+            front_lang: val.front_lang,
+            front_text: val.front_text,
+        }
     }
 }
 
@@ -511,16 +537,6 @@ impl AuthState {
         let state = serde_json::to_string(&state).unwrap();
         Self { key, state }
     }
-    pub async fn get_by_did(did: &str, pool: &PgPool) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as(
-            "
-SELECT key, state FROM auth_state WHERE key = $1 LIMIT 1
-",
-        )
-        .bind(did)
-        .fetch_optional(pool)
-        .await
-    }
     pub async fn save_or_update(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
         let mut tx = pool.begin().await?;
         let existing = sqlx::query("SELECT key FROM auth_state WHERE key = $1")
@@ -544,13 +560,6 @@ UPDATE auth_state SET state = $2 WHERE key = $1
     }
     pub async fn delete_all(pool: &PgPool) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM auth_state").execute(pool).await?;
-        Ok(())
-    }
-    pub async fn delete_by_did(did: &str, pool: &PgPool) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM auth_state WHERE key = $1")
-            .bind(did)
-            .execute(pool)
-            .await?;
         Ok(())
     }
     pub async fn get_by_key(key: &str, pool: &PgPool) -> Result<Option<Self>, sqlx::Error> {

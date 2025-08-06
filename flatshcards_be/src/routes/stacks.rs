@@ -64,7 +64,7 @@ pub(crate) async fn create_stack(
             }
             .render()
             .expect("template should be valid");
-            return HttpResponse::Ok().body(error_html);
+            return HttpResponse::BadRequest().body(error_html);
         };
         if !form.back_valid() {
             let bad_lang = form.back_lang.unwrap(); // None is valid
